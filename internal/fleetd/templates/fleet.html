@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root { --bg:#f6f1e7; --panel:#fffdf8; --line:#d8ccbb; --text:#241d18; --muted:#716554; --accent:#125b50; --warn:#9f3724; }
+    body { margin:0; font:15px/1.55 "Avenir Next","PingFang SC","Noto Sans CJK SC",sans-serif; background:radial-gradient(circle at top left,#efe0c1,#f7f3eb 42%,#ecebe7); color:var(--text); }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 24px; border-bottom:1px solid rgba(36,29,24,.08); backdrop-filter:blur(14px); position:sticky; top:0; background:rgba(246,241,231,.88); }
+    nav { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .brand { font-weight:800; font-size:22px; color:var(--text); text-decoration:none; }
+    .muted { color:var(--muted); }
+    .button, button { border:0; border-radius:999px; padding:10px 14px; font:inherit; background:var(--accent); color:#fff; cursor:pointer; text-decoration:none; display:inline-block; }
+    .ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+    main { width:min(1160px,100% - 32px); margin:28px auto 40px; }
+    .hero h1 { margin:0 0 8px; font-size:36px; }
+    .hero p { margin:0 0 18px; color:var(--muted); }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 12px 32px rgba(66,45,24,.05); margin-bottom:18px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; vertical-align:top; padding:14px 10px; border-bottom:1px solid rgba(36,29,24,.08); }
+    th { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.08em; }
+    .empty { text-align:center; color:var(--muted); padding:28px 0; }
+    .error { color:var(--warn); }
+    code, pre { background:#f2ece2; border-radius:10px; padding:3px 6px; }
+    pre { padding:14px; overflow:auto; }
+    input { width:180px; max-width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font:inherit; }
+    .row-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
+    .meta div { background:#faf6ef; border-radius:12px; padding:12px; }
+    .label { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <a class="brand" href="/fleet/claims">Fleet</a>
+      <div class="muted">用户设备认领 / 节点管理</div>
+    </div>
+    <nav>
+      <span class="muted">当前用户：{{.Principal}}</span>
+      <a class="button ghost" href="/fleet/claims">设备认领</a>
+      <a class="button ghost" href="/fleet/nodes">我的节点</a>
+      <form method="post" action="/fleet/logout"><button class="ghost" type="submit">退出</button></form>
+    </nav>
+  </header>
+
+  <main>
+    {{if .Error}}
+    <section class="panel"><div class="error">{{.Error}}</div></section>
+    {{end}}
+
+    {{if eq .Page "claims"}}
+    <section class="hero">
+      <h1>待认领设备</h1>
+      <p>设备先用 <code>openclaw node run</code> 或 <code>openclaw node install</code> 连接到 Fleet 节点端点，接入后会先出现在这里。认领前请核对显示名、设备 ID、平台和请求时间。</p>
+    </section>
+    <section class="panel">
+      <table>
+        <thead><tr><th>设备</th><th>接入信息</th><th>操作</th></tr></thead>
+        <tbody>
+          {{range .Claims}}
+          <tr>
+            <td><strong>{{if .DisplayName}}{{.DisplayName}}{{else}}{{.DeviceID}}{{end}}</strong><br><span class="muted">{{.DeviceID}}</span></td>
+            <td>
+              <div>{{.Platform}} {{.DeviceFamily}}</div>
+              <div class="muted">{{.ClientID}} / {{.ClientMode}}</div>
+              {{if .RemoteIP}}<div class="muted">{{.RemoteIP}}</div>{{end}}
+              <div class="muted">{{.RequestedAt.Format "2006-01-02 15:04:05"}}</div>
+            </td>
+            <td class="row-actions">
+              <form method="post" action="/fleet/claims/{{.PairingID}}/approve" class="inline">
+                <input name="device_id_suffix" placeholder="输入设备 ID 后 6 位" autocomplete="off" spellcheck="false">
+                <button type="submit">认领</button>
+              </form>
+              <form method="post" action="/fleet/claims/{{.PairingID}}/reject"><button class="ghost" type="submit">拒绝</button></form>
+            </td>
+          </tr>
+          {{else}}
+          <tr><td class="empty" colspan="3">当前没有待认领设备</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </section>
+    {{end}}
+
+    {{if eq .Page "nodes"}}
+    <section class="hero">
+      <h1>我的节点</h1>
+      <p>这里只展示当前用户已认领设备对应的节点；未认领设备不会出现在列表里。</p>
+    </section>
+    <section class="panel">
+      <table>
+        <thead><tr><th>节点</th><th>状态</th><th>命令</th><th>操作</th></tr></thead>
+        <tbody>
+          {{range .Nodes}}
+          <tr>
+            <td><strong>{{if .DisplayName}}{{.DisplayName}}{{else}}{{.NodeID}}{{end}}</strong><br><span class="muted">{{.NodeID}}</span></td>
+            <td>{{.Status}}<br><span class="muted">{{if .Connected}}在线{{else}}离线{{end}}</span></td>
+            <td>{{range $i, $v := .Commands}}{{if $i}}, {{end}}{{$v}}{{else}}无{{end}}</td>
+            <td><a href="/fleet/nodes/{{.NodeID}}">详情</a></td>
+          </tr>
+          {{else}}
+          <tr><td class="empty" colspan="4">当前没有节点</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </section>
+    {{end}}
+
+    {{if eq .Page "node"}}
+    <section class="hero">
+      <h1>{{if .Node.DisplayName}}{{.Node.DisplayName}}{{else}}{{.Node.NodeID}}{{end}}</h1>
+      <p>当前连接快照和该节点对外暴露的能力。</p>
+    </section>
+    <section class="panel">
+      <div class="meta">
+        <div><span class="label">节点 ID</span>{{.Node.NodeID}}</div>
+        <div><span class="label">设备 ID</span>{{.Node.DeviceID}}</div>
+        <div><span class="label">平台</span>{{.Node.Platform}}</div>
+        <div><span class="label">状态</span>{{.Node.Status}}</div>
+        <div><span class="label">在线</span>{{if .Node.Connected}}是{{else}}否{{end}}</div>
+        <div><span class="label">设备族</span>{{.Node.DeviceFamily}}</div>
+      </div>
+    </section>
+    <section class="panel">
+      <h3>Commands</h3>
+      <pre>{{range .Node.Commands}}{{.}}
+{{else}}无{{end}}</pre>
+      <h3>Caps</h3>
+      <pre>{{range .Node.Caps}}{{.}}
+{{else}}无{{end}}</pre>
+    </section>
+    {{end}}
+  </main>
+</body>
+</html>

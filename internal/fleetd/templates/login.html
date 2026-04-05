@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root { color-scheme: light; --bg:#f3f0e8; --panel:#fffdf8; --line:#d9cfbb; --text:#1e1a16; --muted:#756958; --accent:#9d4f28; }
+    body { margin:0; font:16px/1.5 "Iowan Old Style","Source Han Serif SC","Noto Serif SC",serif; background:linear-gradient(135deg,#efe5d3,#f7f3eb 45%,#ece7df); color:var(--text); }
+    .wrap { min-height:100vh; display:grid; place-items:center; padding:24px; }
+    .card { width:min(480px,100%); background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:28px; box-shadow:0 16px 48px rgba(53,35,17,.08); }
+    h1 { margin:0 0 8px; font-size:34px; }
+    p { margin:0 0 20px; color:var(--muted); }
+    label { display:block; margin:0 0 8px; font-weight:600; }
+    input { width:100%; box-sizing:border-box; padding:12px 14px; border-radius:12px; border:1px solid var(--line); margin:0 0 16px; font:inherit; background:#fff; }
+    button { border:0; border-radius:999px; padding:12px 18px; font:inherit; background:var(--accent); color:#fff; cursor:pointer; }
+    .error { margin:0 0 16px; color:#a12b2b; }
+    code { background:#f0e8da; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card">
+      <h1>Fleet</h1>
+      <p>把登录 JWT 写入本地 cookie，页面之后会按 token 的 <code>sub</code> 展示并隔离你的节点。</p>
+      {{if .LoginError}}<div class="error">{{.LoginError}}</div>{{end}}
+      <form method="post" action="/fleet/login">
+        <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+        <label for="token">JWT</label>
+        <input id="token" name="token" placeholder="粘贴登录 token">
+        <button type="submit">进入 Fleet</button>
+      </form>
+    </section>
+  </div>
+</body>
+</html>
