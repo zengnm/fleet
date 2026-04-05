@@ -352,6 +352,96 @@ go run ./cmd/fleet invoke <node-id> system.which --json '{"name":"git","bins":["
 - `system.run.prepare` 能验证 `invoke` 链路没问题，还能看到节点规范化后的可执行路径
 - `system.which` 必须带 `bins`；不同机器上结果可能为空，这取决于节点主机是否真的有这些路径
 
+浏览器能力示例：
+
+这组写法没有在本文环境做端到端实机验证，但我已按 `2026-04-06` 时的 OpenClaw 官方文档和 `openclaw` npm 包 `2026.4.2` 运行时代码核对过当前调用形态。
+
+先确认节点是否真的暴露了浏览器代理命令：
+
+```bash
+go run ./cmd/fleet describe <node-id>
+```
+
+至少满足其一才继续：
+
+- `Caps` 里有 `browser`
+- `Commands` 里有 `browser.proxy`
+
+如果节点没有这项能力，先检查节点主机上的 OpenClaw 浏览器插件是否启用；当你配置了 `plugins.allow` 时，还必须显式包含 `browser`。
+
+先打开一个页面：
+
+```bash
+go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+  "method": "POST",
+  "path": "/tabs/open",
+  "body": {
+    "url": "https://example.com"
+  },
+  "timeoutMs": 20000
+}'
+```
+
+列出现有标签页：
+
+```bash
+go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+  "method": "GET",
+  "path": "/tabs",
+  "timeoutMs": 20000
+}'
+```
+
+拿到 `targetId` 后再导航：
+
+```bash
+go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+  "method": "POST",
+  "path": "/navigate",
+  "body": {
+    "targetId": "<target-id>",
+    "url": "https://example.com"
+  },
+  "timeoutMs": 20000
+}'
+```
+
+抓取页面 snapshot：
+
+```bash
+go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+  "method": "GET",
+  "path": "/snapshot",
+  "query": {
+    "targetId": "<target-id>",
+    "interactive": "true"
+  },
+  "timeoutMs": 20000
+}'
+```
+
+如果 snapshot 返回了可点击元素的 `ref`，再做一次点击：
+
+```bash
+go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+  "method": "POST",
+  "path": "/act",
+  "body": {
+    "kind": "click",
+    "targetId": "<target-id>",
+    "ref": "e12"
+  },
+  "timeoutMs": 20000
+}'
+```
+
+补充说明：
+
+- `browser.proxy` 的参数形态本质上是对 OpenClaw 浏览器控制路由的透传，核心字段是 `method`、`path`、`query`、`body`
+- 常见路径包括 `/tabs`、`/tabs/open`、`/navigate`、`/snapshot`、`/act`
+- `navigate`、`act`、AI snapshot 等能力通常依赖 Playwright；如果节点主机没装完整 Playwright，节点可能返回 `501`
+- 页面跳转后 `ref` 可能失效；这是浏览器 snapshot 的正常行为，需要重新抓一次 `/snapshot`
+
 远程执行形态：
 
 ```bash
@@ -440,6 +530,111 @@ curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/run \
   -H 'Content-Type: application/json' \
   -d '{
     "command": ["uname", "-a"]
+  }'
+```
+
+浏览器能力示例：
+
+和 CLI 一样，这里前提仍然是节点详情里能看到 `browser.proxy` 或 `browser` capability。
+
+先开一个标签页：
+
+```bash
+curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
+  -H 'API_KEY: replace-me' \
+  -H 'USER_ID: anonymous' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "command": "browser.proxy",
+    "params": {
+      "method": "POST",
+      "path": "/tabs/open",
+      "body": {
+        "url": "https://example.com"
+      },
+      "timeoutMs": 20000
+    }
+  }'
+```
+
+列标签页：
+
+```bash
+curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
+  -H 'API_KEY: replace-me' \
+  -H 'USER_ID: anonymous' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "command": "browser.proxy",
+    "params": {
+      "method": "GET",
+      "path": "/tabs",
+      "timeoutMs": 20000
+    }
+  }'
+```
+
+拿到 `targetId` 后导航：
+
+```bash
+curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
+  -H 'API_KEY: replace-me' \
+  -H 'USER_ID: anonymous' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "command": "browser.proxy",
+    "params": {
+      "method": "POST",
+      "path": "/navigate",
+      "body": {
+        "targetId": "<target-id>",
+        "url": "https://example.com"
+      },
+      "timeoutMs": 20000
+    }
+  }'
+```
+
+抓 interactive snapshot：
+
+```bash
+curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
+  -H 'API_KEY: replace-me' \
+  -H 'USER_ID: anonymous' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "command": "browser.proxy",
+    "params": {
+      "method": "GET",
+      "path": "/snapshot",
+      "query": {
+        "targetId": "<target-id>",
+        "interactive": "true"
+      },
+      "timeoutMs": 20000
+    }
+  }'
+```
+
+基于 snapshot 返回的 `ref` 做点击：
+
+```bash
+curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
+  -H 'API_KEY: replace-me' \
+  -H 'USER_ID: anonymous' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "command": "browser.proxy",
+    "params": {
+      "method": "POST",
+      "path": "/act",
+      "body": {
+        "kind": "click",
+        "targetId": "<target-id>",
+        "ref": "e12"
+      },
+      "timeoutMs": 20000
+    }
   }'
 ```
 
