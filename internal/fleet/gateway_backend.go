@@ -337,6 +337,15 @@ func (b *GatewayBackend) RejectClaim(ctx context.Context, pairingID string) erro
 	return session.request(ctx, "device.pair.reject", map[string]any{"requestId": pairingID}, nil)
 }
 
+func (b *GatewayBackend) UnclaimDevice(ctx context.Context, deviceID string) error {
+	session, err := b.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.request(ctx, "device.pair.remove", map[string]any{"deviceId": deviceID}, nil)
+}
+
 func (b *GatewayBackend) ListNodes(ctx context.Context) ([]spec.FleetOwnedNode, error) {
 	session, err := b.connect(ctx)
 	if err != nil {
@@ -974,29 +983,30 @@ func toOwnedNode(node gatewayNode) spec.FleetOwnedNode {
 		status = "online"
 	}
 	return spec.FleetOwnedNode{
-		DeviceID:     firstNonEmpty(node.NodeID),
-		NodeID:       node.NodeID,
-		DisplayName:  node.DisplayName,
-		Platform:     node.Platform,
-		Version:      node.Version,
-		CoreVersion:  node.CoreVersion,
-		UIVersion:    node.UIVersion,
-		ClientID:     node.ClientID,
-		ClientMode:   node.ClientMode,
-		RemoteIP:     node.RemoteIP,
-		DeviceFamily: node.DeviceFamily,
-		ModelID:      node.ModelIdentifier,
-		PathEnv:      node.PathEnv,
-		Caps:         append([]string(nil), node.Caps...),
-		Commands:     append([]string(nil), node.Commands...),
-		Permissions:  cloneBoolMap(node.Permissions),
-		Status:       status,
-		Paired:       node.Paired,
-		Connected:    node.Connected,
-		ConnectedAt:  connectedAt,
-		ApprovedAt:   approvedAt,
-		LastSeenAt:   lastSeenAt,
-		UpdatedAt:    time.Now().UTC(),
+		DeviceID:      firstNonEmpty(node.NodeID),
+		NodeID:        node.NodeID,
+		BackendNodeID: node.NodeID,
+		DisplayName:   node.DisplayName,
+		Platform:      node.Platform,
+		Version:       node.Version,
+		CoreVersion:   node.CoreVersion,
+		UIVersion:     node.UIVersion,
+		ClientID:      node.ClientID,
+		ClientMode:    node.ClientMode,
+		RemoteIP:      node.RemoteIP,
+		DeviceFamily:  node.DeviceFamily,
+		ModelID:       node.ModelIdentifier,
+		PathEnv:       node.PathEnv,
+		Caps:          append([]string(nil), node.Caps...),
+		Commands:      append([]string(nil), node.Commands...),
+		Permissions:   cloneBoolMap(node.Permissions),
+		Status:        status,
+		Paired:        node.Paired,
+		Connected:     node.Connected,
+		ConnectedAt:   connectedAt,
+		ApprovedAt:    approvedAt,
+		LastSeenAt:    lastSeenAt,
+		UpdatedAt:     time.Now().UTC(),
 	}
 }
 

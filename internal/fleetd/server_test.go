@@ -73,15 +73,18 @@ func TestFleetdEndToEnd(t *testing.T) {
 	if _, err := pageBody.ReadFrom(pageRes.Body); err != nil {
 		t.Fatalf("read claims page: %v", err)
 	}
-	if !strings.Contains(pageBody.String(), claim.DeviceID) || !strings.Contains(pageBody.String(), "输入设备 ID 后 6 位") {
+	devicePrefix := strings.ToUpper(claim.DeviceID[:len(claim.DeviceID)/2])
+	if !strings.Contains(pageBody.String(), devicePrefix) || !strings.Contains(pageBody.String(), "输入完整设备 ID") {
 		t.Fatalf("claims page did not render the pending claim")
 	}
-
-	deviceSuffix := claim.DeviceID
-	if len(deviceSuffix) > 6 {
-		deviceSuffix = deviceSuffix[len(deviceSuffix)-6:]
+	if !strings.Contains(pageBody.String(), "~/.openclaw/identity/device.json") {
+		t.Fatalf("claims page should render device identity file hint")
 	}
-	if _, _, err := server.fleet.ApproveClaim(ctx, "user-a", claim.PairingID, deviceSuffix); err != nil {
+	if strings.Contains(pageBody.String(), claim.DeviceID) {
+		t.Fatalf("claims page should not render the full device id")
+	}
+
+	if _, _, err := server.fleet.ApproveClaim(ctx, "user-a", claim.PairingID, strings.ToUpper(claim.DeviceID)); err != nil {
 		t.Fatalf("approve claim: %v", err)
 	}
 
@@ -89,8 +92,45 @@ func TestFleetdEndToEnd(t *testing.T) {
 	if len(nodes) != 1 {
 		t.Fatalf("expected 1 node for user-a, got %d", len(nodes))
 	}
-	if nodes[0].NodeID != node.DeviceID {
-		t.Fatalf("unexpected node id: %s", nodes[0].NodeID)
+	nodeAlias := nodes[0].NodeID
+	if nodeAlias == node.DeviceID || len(nodeAlias) >= len(node.DeviceID) {
+		t.Fatalf("expected shortened node id, got %q", nodeAlias)
+	}
+
+	token := signedJWTWithClaims(t, keys.PrivateKey, jwt.MapClaims{"sub": "user-a"})
+	nodesReq, err := http.NewRequest(http.MethodGet, baseURL+"/fleet/nodes", nil)
+	if err != nil {
+		t.Fatalf("new nodes page request: %v", err)
+	}
+	nodesReq.Header.Set("Authorization", "Bearer "+token)
+	nodesRes, err := http.DefaultClient.Do(nodesReq)
+	if err != nil {
+		t.Fatalf("nodes page request: %v", err)
+	}
+	defer nodesRes.Body.Close()
+	nodesBody := new(bytes.Buffer)
+	if _, err := nodesBody.ReadFrom(nodesRes.Body); err != nil {
+		t.Fatalf("read nodes page: %v", err)
+	}
+	if !strings.Contains(nodesBody.String(), "解除认领") {
+		t.Fatalf("nodes page should render unclaim button")
+	}
+	detailReq, err := http.NewRequest(http.MethodGet, baseURL+"/fleet/nodes/"+nodeAlias, nil)
+	if err != nil {
+		t.Fatalf("new node detail request: %v", err)
+	}
+	detailReq.Header.Set("Authorization", "Bearer "+token)
+	detailRes, err := http.DefaultClient.Do(detailReq)
+	if err != nil {
+		t.Fatalf("node detail request: %v", err)
+	}
+	defer detailRes.Body.Close()
+	detailBody := new(bytes.Buffer)
+	if _, err := detailBody.ReadFrom(detailRes.Body); err != nil {
+		t.Fatalf("read node detail page: %v", err)
+	}
+	if !strings.Contains(detailBody.String(), "解除认领") {
+		t.Fatalf("node detail page should render unclaim button")
 	}
 
 	otherNodes := runtimeListNodes(t, baseURL, "runtime-key", "user-b")
@@ -98,28 +138,57 @@ func TestFleetdEndToEnd(t *testing.T) {
 		t.Fatalf("expected 0 nodes for user-b, got %d", len(otherNodes))
 	}
 
-	invokeResult := runtimeInvokeNode(t, baseURL, "runtime-key", "user-a", node.DeviceID, map[string]any{
+	invokeResult := runtimeInvokeNode(t, baseURL, "runtime-key", "user-a", nodeAlias, map[string]any{
 		"command": "system.which",
 		"params":  map[string]any{"name": "git"},
 	})
 	if !invokeResult.OK {
 		t.Fatalf("expected invoke ok=true, got %+v", invokeResult)
 	}
+	if invokeResult.NodeID != nodeAlias {
+		t.Fatalf("invoke result node id = %q, want %q", invokeResult.NodeID, nodeAlias)
+	}
 
-	runResult := runtimeRunNode(t, baseURL, "runtime-key", "user-a", node.DeviceID, map[string]any{
+	runResult := runtimeRunNode(t, baseURL, "runtime-key", "user-a", nodeAlias, map[string]any{
 		"command": []string{"echo", "hello"},
 	})
 	stdout, _ := runResult.Result["stdout"].(string)
 	if stdout != "hello\n" {
 		t.Fatalf("unexpected run stdout: %#v", runResult.Result)
 	}
+	if runResult.NodeID != nodeAlias {
+		t.Fatalf("run result node id = %q, want %q", runResult.NodeID, nodeAlias)
+	}
 
-	node.Close()
-	waitForNodeOffline(t, baseURL, "runtime-key", "user-a", node.DeviceID)
-	runtimeInvokeNodeError(t, baseURL, "runtime-key", "user-a", node.DeviceID, map[string]any{
-		"command": "system.which",
-		"params":  map[string]any{"name": "git"},
-	}, http.StatusConflict, "node_offline")
+	client := newNoRedirectClient()
+	unclaimReq, err := http.NewRequest(http.MethodPost, baseURL+"/fleet/nodes/"+nodeAlias+"/unclaim", nil)
+	if err != nil {
+		t.Fatalf("new unclaim request: %v", err)
+	}
+	unclaimReq.Header.Set("Authorization", "Bearer "+token)
+	unclaimRes, err := client.Do(unclaimReq)
+	if err != nil {
+		t.Fatalf("unclaim request: %v", err)
+	}
+	defer unclaimRes.Body.Close()
+	if unclaimRes.StatusCode != http.StatusSeeOther {
+		t.Fatalf("unclaim status = %d", unclaimRes.StatusCode)
+	}
+	if location := unclaimRes.Header.Get("Location"); location != "/fleet/claims" {
+		t.Fatalf("unclaim location = %q", location)
+	}
+
+	nodes = runtimeListNodes(t, baseURL, "runtime-key", "user-a")
+	if len(nodes) != 0 {
+		t.Fatalf("expected 0 nodes for user-a after unclaim, got %d", len(nodes))
+	}
+	claims, err = server.fleet.ListClaims(ctx)
+	if err != nil {
+		t.Fatalf("list claims after unclaim: %v", err)
+	}
+	if len(claims) != 1 || claims[0].DeviceID != node.DeviceID {
+		t.Fatalf("expected pending claim after unclaim, got %+v", claims)
+	}
 
 	reconnected := connectTestNode(t, wsURL, testNodeOptions{
 		Identity:    node.Identity,
@@ -130,7 +199,14 @@ func TestFleetdEndToEnd(t *testing.T) {
 	if reconnected.DeviceID != node.DeviceID {
 		t.Fatalf("device id changed on reconnect: %s -> %s", node.DeviceID, reconnected.DeviceID)
 	}
-	waitForNodeOnline(t, baseURL, "runtime-key", "user-a", node.DeviceID, "Reconnected Node")
+	_, reapprovedNodes, err := server.fleet.ApproveClaim(ctx, "user-a", claims[0].PairingID, strings.ToUpper(node.DeviceID))
+	if err != nil {
+		t.Fatalf("approve claim after unclaim: %v", err)
+	}
+	if len(reapprovedNodes) != 1 {
+		t.Fatalf("expected 1 node after reapprove, got %d", len(reapprovedNodes))
+	}
+	waitForNodeOnline(t, baseURL, "runtime-key", "user-a", reapprovedNodes[0].NodeID, "Reconnected Node")
 	claims, err = server.fleet.ListClaims(ctx)
 	if err != nil {
 		t.Fatalf("list claims after reconnect: %v", err)
@@ -276,11 +352,7 @@ func TestFleetdWebLoginUsesConfiguredUserIDField(t *testing.T) {
 		t.Fatalf("claims page did not render configured user id")
 	}
 
-	deviceSuffix := claim.DeviceID
-	if len(deviceSuffix) > 6 {
-		deviceSuffix = deviceSuffix[len(deviceSuffix)-6:]
-	}
-	approveBody := url.Values{"device_id_suffix": {deviceSuffix}}
+	approveBody := url.Values{"device_id_suffix": {strings.ToUpper(claim.DeviceID)}}
 	approveReq, err := http.NewRequest(http.MethodPost, baseURL+"/fleet/claims/"+claim.PairingID+"/approve", strings.NewReader(approveBody.Encode()))
 	if err != nil {
 		t.Fatalf("new approve request: %v", err)
@@ -300,7 +372,7 @@ func TestFleetdWebLoginUsesConfiguredUserIDField(t *testing.T) {
 	}
 
 	nodes := runtimeListNodes(t, baseURL, "runtime-key", "user-uid")
-	if len(nodes) != 1 || nodes[0].NodeID != node.DeviceID {
+	if len(nodes) != 1 || nodes[0].NodeID == node.DeviceID {
 		t.Fatalf("unexpected nodes for configured uid: %+v", nodes)
 	}
 }

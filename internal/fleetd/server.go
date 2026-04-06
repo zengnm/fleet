@@ -32,17 +32,17 @@ type Server struct {
 }
 
 type pageData struct {
-	Title      string
-	Page       string
-	ReturnTo   string
-	LoginError string
-	Principal  string
+	Title       string
+	Page        string
+	ReturnTo    string
+	LoginError  string
+	Principal   string
 	AuthEnabled bool
 	UserIDField string
-	Error      string
-	Claims     []spec.FleetPendingClaim
-	Nodes      []spec.FleetOwnedNode
-	Node       *spec.FleetOwnedNode
+	Error       string
+	Claims      []spec.FleetPendingClaim
+	Nodes       []spec.FleetOwnedNode
+	Node        *spec.FleetOwnedNode
 }
 
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
@@ -60,7 +60,9 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	backend := NewBackend(cfg, backing)
 	service := fleetsvc.NewService(backing, backend)
-	templates, err := template.New("fleetd").ParseFS(fleetTemplates, "templates/*.html")
+	templates, err := template.New("fleetd").Funcs(template.FuncMap{
+		"claimPrefix": fleetsvc.ClaimDisplayPrefix,
+	}).ParseFS(fleetTemplates, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /fleet/claims", s.withUserPage(s.handleClaims))
 	mux.HandleFunc("POST /fleet/claims/", s.withUserPage(s.handleClaimRoutes))
 	mux.HandleFunc("GET /fleet/nodes", s.withUserPage(s.handleNodes))
+	mux.HandleFunc("POST /fleet/nodes/", s.withUserPage(s.handleNodeRoutes))
 	mux.HandleFunc("GET /fleet/nodes/", s.withUserPage(s.handleNode))
 	mux.HandleFunc("GET /runtime/fleet/nodes", s.withRuntimeAuth(s.handleRuntimeNodes))
 	mux.HandleFunc("GET /runtime/fleet/nodes/", s.withRuntimeAuth(s.handleRuntimeNodeRoutes))
@@ -286,6 +289,26 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, principal *P
 		Principal: principal.Subject,
 		Node:      &node,
 	})
+}
+
+func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request, principal *Principal) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/fleet/nodes/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+	nodeID, action := parts[0], parts[1]
+	switch action {
+	case "unclaim":
+		if err := s.fleet.UnclaimNode(r.Context(), principal.Subject, nodeID); err != nil {
+			http.Redirect(w, r, "/fleet/nodes?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/fleet/claims", http.StatusSeeOther)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func (s *Server) handleRuntimeNodes(w http.ResponseWriter, r *http.Request, principal *Principal) {

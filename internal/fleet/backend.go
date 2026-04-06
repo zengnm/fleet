@@ -10,7 +10,7 @@ import (
 var (
 	ErrBackendUnavailable = errors.New("fleet backend is not configured")
 	ErrClaimNotFound      = errors.New("claim not found")
-	ErrClaimConfirmation  = errors.New("device confirmation does not match")
+	ErrClaimConfirmation  = errors.New("device id does not match")
 	ErrForbidden          = errors.New("node is not owned by the current user")
 	ErrNodeNotFound       = errors.New("node not found")
 	ErrNodeOffline        = errors.New("node is offline")
@@ -21,6 +21,7 @@ type Backend interface {
 	ListPendingClaims(context.Context) ([]spec.FleetPendingClaim, error)
 	ApproveClaim(context.Context, string) (spec.FleetOwnedDevice, []spec.FleetOwnedNode, error)
 	RejectClaim(context.Context, string) error
+	UnclaimDevice(context.Context, string) error
 	ListNodes(context.Context) ([]spec.FleetOwnedNode, error)
 	DescribeNode(context.Context, string) (spec.FleetOwnedNode, error)
 	InvokeNode(context.Context, string, string, map[string]any) (spec.FleetInvokeResponse, error)
@@ -38,6 +39,10 @@ func (NoopBackend) ApproveClaim(context.Context, string) (spec.FleetOwnedDevice,
 }
 
 func (NoopBackend) RejectClaim(context.Context, string) error {
+	return ErrBackendUnavailable
+}
+
+func (NoopBackend) UnclaimDevice(context.Context, string) error {
 	return ErrBackendUnavailable
 }
 

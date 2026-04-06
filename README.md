@@ -51,6 +51,8 @@ USER_ID=anonymous \
 go run ./cmd/fleet list
 ```
 
+设备认领时，需要输入完整设备 ID。对于 `openclaw node` 启动的节点，可在节点本机的 `~/.openclaw/identity/device.json` 查看该值。
+
 说明：
 
 - 默认示例里没有配置 `FLEETD_JWT_RS256_PUBLIC_KEY`，页面认领产生的用户是 `anonymous`

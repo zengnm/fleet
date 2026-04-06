@@ -311,6 +311,27 @@ func (b *Backend) RejectClaim(ctx context.Context, pairingID string) error {
 	return nil
 }
 
+func (b *Backend) UnclaimDevice(ctx context.Context, deviceID string) error {
+	state, err := b.store.GetFleetNodeAuthState(ctx, deviceID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		state = nil
+	}
+	session := b.sessionByDevice(deviceID)
+	now := time.Now().UTC()
+	if claim := pendingClaimFromNodeState(deviceID, session, state, now); claim != nil {
+		if err := b.store.UpsertFleetPendingClaim(ctx, *claim); err != nil {
+			return err
+		}
+	}
+	if session != nil {
+		session.close()
+	}
+	return nil
+}
+
 func (b *Backend) ListNodes(ctx context.Context) ([]spec.FleetOwnedNode, error) {
 	b.mu.RLock()
 	sessions := make([]*nodeSession, 0, len(b.sessionsByNode))
@@ -949,7 +970,52 @@ func randomRequestID() string {
 }
 
 func pairingIDForDevice(deviceID string) string {
-	return "claim-" + deviceID
+	sum := sha256.Sum256([]byte(strings.TrimSpace(deviceID)))
+	return "claim-" + hex.EncodeToString(sum[:])
+}
+
+func pendingClaimFromNodeState(deviceID string, session *nodeSession, state *spec.FleetNodeAuthState, now time.Time) *spec.FleetPendingClaim {
+	claim := spec.FleetPendingClaim{
+		PairingID:   pairingIDForDevice(deviceID),
+		DeviceID:    strings.TrimSpace(deviceID),
+		Status:      "pending",
+		RequestedAt: now,
+		UpdatedAt:   now,
+	}
+	var hasData bool
+	if state != nil {
+		claim.DisplayName = firstNonEmpty(state.DisplayName, deviceID)
+		claim.PublicKey = state.PublicKey
+		claim.Platform = state.Platform
+		claim.DeviceFamily = state.DeviceFamily
+		claim.ClientID = state.ClientID
+		claim.ClientMode = state.ClientMode
+		claim.Role = state.Role
+		hasData = true
+	}
+	if session != nil {
+		session.mu.Lock()
+		claim.DisplayName = firstNonEmpty(session.displayName, claim.DisplayName, deviceID)
+		claim.PublicKey = firstNonEmpty(session.publicKey, claim.PublicKey)
+		claim.Platform = firstNonEmpty(session.platform, claim.Platform)
+		claim.DeviceFamily = firstNonEmpty(session.deviceFamily, claim.DeviceFamily)
+		claim.ClientID = firstNonEmpty(session.clientID, claim.ClientID)
+		claim.ClientMode = firstNonEmpty(session.clientMode, claim.ClientMode)
+		claim.Role = firstNonEmpty(session.role, claim.Role)
+		claim.RemoteIP = firstNonEmpty(session.remoteIP, claim.RemoteIP)
+		session.mu.Unlock()
+		hasData = true
+	}
+	if !hasData {
+		return nil
+	}
+	if claim.DisplayName == "" {
+		claim.DisplayName = deviceID
+	}
+	if claim.Role == "" {
+		claim.Role = "node"
+	}
+	return &claim
 }
 
 func remoteHost(addr string) string {

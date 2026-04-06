@@ -13,6 +13,7 @@
     .muted { color:var(--muted); }
     .button, button { border:0; border-radius:999px; padding:10px 14px; font:inherit; background:var(--accent); color:#fff; cursor:pointer; text-decoration:none; display:inline-block; }
     .ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+    .danger { background:#fff3ef; color:#8b2f21; border:1px solid rgba(159,55,36,.22); box-shadow:inset 0 1px 0 rgba(255,255,255,.7); }
     main { width:min(1160px,100% - 32px); margin:28px auto 40px; }
     .hero h1 { margin:0 0 8px; font-size:36px; }
     .hero p { margin:0 0 18px; color:var(--muted); }
@@ -27,9 +28,13 @@
     input { width:180px; max-width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font:inherit; }
     .row-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
+    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
     .meta div { background:#faf6ef; border-radius:12px; padding:12px; }
     .label { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+    .hint { display:block; color:var(--muted); font-size:13px; max-width:320px; }
+    .id-value { display:block; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:1.45; word-break:break-all; overflow-wrap:anywhere; }
+    .meta .span-2 { grid-column:span 2; }
+    @media (max-width: 720px) { .meta .span-2 { grid-column:span 1; } }
   </style>
 </head>
 <body>
@@ -56,7 +61,7 @@
     {{if eq .Page "claims"}}
     <section class="hero">
       <h1>待认领设备</h1>
-      <p>设备先用 <code>openclaw node run</code> 或 <code>openclaw node install</code> 连接到 Fleet 节点端点，接入后会先出现在这里。认领前请核对显示名、设备 ID、平台和请求时间。</p>
+      <p>设备先用 <code>openclaw node run</code> 或 <code>openclaw node install</code> 连接到 Fleet 节点端点，接入后会先出现在这里。页面只展示设备 ID 前半部分辅助核对；认领时需输入完整设备 ID，完整值可在节点本机的 <code>~/.openclaw/identity/device.json</code> 查看。</p>
     </section>
     <section class="panel">
       <table>
@@ -64,7 +69,7 @@
         <tbody>
           {{range .Claims}}
           <tr>
-            <td><strong>{{if .DisplayName}}{{.DisplayName}}{{else}}{{.DeviceID}}{{end}}</strong><br><span class="muted">{{.DeviceID}}</span></td>
+            <td><strong>{{if .DisplayName}}{{.DisplayName}}{{else}}{{claimPrefix .DeviceID}}{{end}}</strong><br><span class="muted">设备 ID 前半部分：{{claimPrefix .DeviceID}}</span></td>
             <td>
               <div>{{.Platform}} {{.DeviceFamily}}</div>
               <div class="muted">{{.ClientID}} / {{.ClientMode}}</div>
@@ -73,7 +78,8 @@
             </td>
             <td class="row-actions">
               <form method="post" action="/fleet/claims/{{.PairingID}}/approve" class="inline">
-                <input name="device_id_suffix" placeholder="输入设备 ID 后 6 位" autocomplete="off" spellcheck="false">
+                <input name="device_id_suffix" placeholder="输入完整设备 ID" autocomplete="off" spellcheck="false">
+                <span class="hint">设备 ID 不区分大小写，可从 <code>~/.openclaw/identity/device.json</code> 复制。</span>
                 <button type="submit">认领</button>
               </form>
               <form method="post" action="/fleet/claims/{{.PairingID}}/reject"><button class="ghost" type="submit">拒绝</button></form>
@@ -101,7 +107,12 @@
             <td><strong>{{if .DisplayName}}{{.DisplayName}}{{else}}{{.NodeID}}{{end}}</strong><br><span class="muted">{{.NodeID}}</span></td>
             <td>{{.Status}}<br><span class="muted">{{if .Connected}}在线{{else}}离线{{end}}</span></td>
             <td>{{range $i, $v := .Commands}}{{if $i}}, {{end}}{{$v}}{{else}}无{{end}}</td>
-            <td><a href="/fleet/nodes/{{.NodeID}}">详情</a></td>
+            <td class="row-actions">
+              <a href="/fleet/nodes/{{.NodeID}}">详情</a>
+              <form method="post" action="/fleet/nodes/{{.NodeID}}/unclaim" onsubmit="return confirm('将解除该设备认领，并移除该设备下的所有节点，设备会重新回到待认领列表。');">
+                <button class="danger" type="submit">解除认领</button>
+              </form>
+            </td>
           </tr>
           {{else}}
           <tr><td class="empty" colspan="4">当前没有节点</td></tr>
@@ -118,13 +129,18 @@
     </section>
     <section class="panel">
       <div class="meta">
-        <div><span class="label">节点 ID</span>{{.Node.NodeID}}</div>
-        <div><span class="label">设备 ID</span>{{.Node.DeviceID}}</div>
+        <div><span class="label">节点 ID</span><span class="id-value">{{.Node.NodeID}}</span></div>
+        <div class="span-2"><span class="label">设备 ID</span><span class="id-value">{{.Node.DeviceID}}</span></div>
         <div><span class="label">平台</span>{{.Node.Platform}}</div>
         <div><span class="label">状态</span>{{.Node.Status}}</div>
         <div><span class="label">在线</span>{{if .Node.Connected}}是{{else}}否{{end}}</div>
         <div><span class="label">设备族</span>{{.Node.DeviceFamily}}</div>
       </div>
+    </section>
+    <section class="panel">
+      <form method="post" action="/fleet/nodes/{{.Node.NodeID}}/unclaim" onsubmit="return confirm('将解除该设备认领，并移除该设备下的所有节点，设备会重新回到待认领列表。');">
+        <button class="danger" type="submit">解除认领</button>
+      </form>
     </section>
     <section class="panel">
       <h3>Commands</h3>

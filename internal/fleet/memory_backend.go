@@ -144,6 +144,63 @@ func (b *MemoryBackend) RejectClaim(_ context.Context, pairingID string) error {
 	return nil
 }
 
+func (b *MemoryBackend) UnclaimDevice(_ context.Context, deviceID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	device, hasDevice := b.devices[deviceID]
+	if hasDevice {
+		delete(b.devices, deviceID)
+	}
+
+	var claim spec.FleetPendingClaim
+	var matched bool
+	for nodeID, node := range b.nodes {
+		if node.DeviceID != deviceID && node.NodeID != deviceID {
+			continue
+		}
+		if !matched {
+			claim = spec.FleetPendingClaim{
+				PairingID:    "claim-" + deviceID,
+				DeviceID:     deviceID,
+				DisplayName:  firstNonEmpty(device.DisplayName, node.DisplayName, deviceID),
+				Platform:     firstNonEmpty(device.Platform, node.Platform),
+				DeviceFamily: firstNonEmpty(device.DeviceFamily, node.DeviceFamily),
+				ClientID:     firstNonEmpty(device.ClientID, node.ClientID),
+				ClientMode:   firstNonEmpty(device.ClientMode, node.ClientMode),
+				Role:         firstNonEmpty(device.Role, "node"),
+				RemoteIP:     firstNonEmpty(device.RemoteIP, node.RemoteIP),
+				Status:       "pending",
+				RequestedAt:  time.Now().UTC(),
+				UpdatedAt:    time.Now().UTC(),
+			}
+			matched = true
+		}
+		delete(b.nodes, nodeID)
+	}
+	if !matched && hasDevice {
+		claim = spec.FleetPendingClaim{
+			PairingID:    "claim-" + deviceID,
+			DeviceID:     deviceID,
+			DisplayName:  firstNonEmpty(device.DisplayName, deviceID),
+			Platform:     device.Platform,
+			DeviceFamily: device.DeviceFamily,
+			ClientID:     device.ClientID,
+			ClientMode:   device.ClientMode,
+			Role:         firstNonEmpty(device.Role, "node"),
+			RemoteIP:     device.RemoteIP,
+			Status:       "pending",
+			RequestedAt:  time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
+		}
+		matched = true
+	}
+	if matched {
+		b.claims[claim.PairingID] = claim
+	}
+	return nil
+}
+
 func (b *MemoryBackend) ListNodes(context.Context) ([]spec.FleetOwnedNode, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

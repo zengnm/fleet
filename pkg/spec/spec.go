@@ -452,30 +452,31 @@ type FleetOwnedDevice struct {
 }
 
 type FleetOwnedNode struct {
-	UserID       string          `json:"user_id"`
-	DeviceID     string          `json:"device_id"`
-	NodeID       string          `json:"node_id"`
-	DisplayName  string          `json:"display_name,omitempty"`
-	Platform     string          `json:"platform,omitempty"`
-	Version      string          `json:"version,omitempty"`
-	CoreVersion  string          `json:"core_version,omitempty"`
-	UIVersion    string          `json:"ui_version,omitempty"`
-	ClientID     string          `json:"client_id,omitempty"`
-	ClientMode   string          `json:"client_mode,omitempty"`
-	RemoteIP     string          `json:"remote_ip,omitempty"`
-	DeviceFamily string          `json:"device_family,omitempty"`
-	ModelID      string          `json:"model_identifier,omitempty"`
-	PathEnv      string          `json:"path_env,omitempty"`
-	Caps         []string        `json:"caps,omitempty"`
-	Commands     []string        `json:"commands,omitempty"`
-	Permissions  map[string]bool `json:"permissions,omitempty"`
-	Status       string          `json:"status"`
-	Paired       bool            `json:"paired"`
-	Connected    bool            `json:"connected"`
-	ConnectedAt  time.Time       `json:"connected_at,omitempty"`
-	ApprovedAt   time.Time       `json:"approved_at,omitempty"`
-	LastSeenAt   time.Time       `json:"last_seen_at,omitempty"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	UserID        string          `json:"user_id"`
+	DeviceID      string          `json:"device_id"`
+	NodeID        string          `json:"node_id"`
+	BackendNodeID string          `json:"backend_node_id,omitempty"`
+	DisplayName   string          `json:"display_name,omitempty"`
+	Platform      string          `json:"platform,omitempty"`
+	Version       string          `json:"version,omitempty"`
+	CoreVersion   string          `json:"core_version,omitempty"`
+	UIVersion     string          `json:"ui_version,omitempty"`
+	ClientID      string          `json:"client_id,omitempty"`
+	ClientMode    string          `json:"client_mode,omitempty"`
+	RemoteIP      string          `json:"remote_ip,omitempty"`
+	DeviceFamily  string          `json:"device_family,omitempty"`
+	ModelID       string          `json:"model_identifier,omitempty"`
+	PathEnv       string          `json:"path_env,omitempty"`
+	Caps          []string        `json:"caps,omitempty"`
+	Commands      []string        `json:"commands,omitempty"`
+	Permissions   map[string]bool `json:"permissions,omitempty"`
+	Status        string          `json:"status"`
+	Paired        bool            `json:"paired"`
+	Connected     bool            `json:"connected"`
+	ConnectedAt   time.Time       `json:"connected_at,omitempty"`
+	ApprovedAt    time.Time       `json:"approved_at,omitempty"`
+	LastSeenAt    time.Time       `json:"last_seen_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type FleetInvokeRequest struct {
