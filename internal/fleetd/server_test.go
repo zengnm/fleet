@@ -5,11 +5,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,16 +30,16 @@ func TestFleetdEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	keys := newTestRS256KeyPair(t)
 	server, baseURL, wsURL := newTestFleetd(t, Config{
-		StoreDSN:        "file:" + filepath.Join(t.TempDir(), "fleetd.db") + "?_pragma=busy_timeout(5000)",
-		MasterKey:       "fleetd-master-key",
-		AuthMode:        "hs256",
-		JWTHS256Secret:  "fleet-ui-secret",
-		RuntimeAuthMode: "api_key",
-		APIKey:          "runtime-key",
-		GatewayToken:    "node-bootstrap-token",
-		TickInterval:    20 * time.Millisecond,
-		RequestTimeout:  2 * time.Second,
+		StoreDSN:          "file:" + filepath.Join(t.TempDir(), "fleetd.db") + "?_pragma=busy_timeout(5000)",
+		MasterKey:         "fleetd-master-key",
+		JWTRS256PublicKey: keys.PublicPEM,
+		RuntimeAuthMode:   "api_key",
+		APIKey:            "runtime-key",
+		GatewayToken:      "node-bootstrap-token",
+		TickInterval:      20 * time.Millisecond,
+		RequestTimeout:    2 * time.Second,
 	})
 
 	node := connectTestNode(t, wsURL, testNodeOptions{
@@ -56,7 +60,7 @@ func TestFleetdEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new claims page request: %v", err)
 	}
-	pageReq.Header.Set("Authorization", "Bearer "+signedJWT(t, "fleet-ui-secret", "user-a"))
+	pageReq.Header.Set("Authorization", "Bearer "+signedJWTWithClaims(t, keys.PrivateKey, jwt.MapClaims{"sub": "user-a"}))
 	pageRes, err := http.DefaultClient.Do(pageReq)
 	if err != nil {
 		t.Fatalf("claims page request: %v", err)
@@ -133,6 +137,217 @@ func TestFleetdEndToEnd(t *testing.T) {
 	}
 	if len(claims) != 0 {
 		t.Fatalf("expected 0 pending claims after reconnect, got %d", len(claims))
+	}
+}
+
+func TestFleetdWebPagesUseAnonymousWithoutRS256Key(t *testing.T) {
+	t.Parallel()
+
+	_, baseURL, wsURL := newTestFleetd(t, Config{
+		StoreDSN:       "file:" + filepath.Join(t.TempDir(), "fleetd.db") + "?_pragma=busy_timeout(5000)",
+		MasterKey:      "fleetd-master-key",
+		GatewayToken:   "node-bootstrap-token",
+		TickInterval:   20 * time.Millisecond,
+		RequestTimeout: 2 * time.Second,
+	})
+
+	node := connectTestNode(t, wsURL, testNodeOptions{
+		DisplayName: "Anonymous Node",
+		Token:       "node-bootstrap-token",
+	})
+	defer node.Close()
+
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/fleet/claims", nil)
+	if err != nil {
+		t.Fatalf("new claims request: %v", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("claims request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("claims status = %d", res.StatusCode)
+	}
+	body := new(bytes.Buffer)
+	if _, err := body.ReadFrom(res.Body); err != nil {
+		t.Fatalf("read claims body: %v", err)
+	}
+	if !strings.Contains(body.String(), "当前用户：anonymous") {
+		t.Fatalf("claims page did not render anonymous principal")
+	}
+	if strings.Contains(body.String(), "退出") {
+		t.Fatalf("claims page should not render logout in anonymous mode")
+	}
+
+	client := newNoRedirectClient()
+	logoutReq, err := http.NewRequest(http.MethodPost, baseURL+"/fleet/logout", nil)
+	if err != nil {
+		t.Fatalf("new logout request: %v", err)
+	}
+	logoutRes, err := client.Do(logoutReq)
+	if err != nil {
+		t.Fatalf("logout request: %v", err)
+	}
+	defer logoutRes.Body.Close()
+	if logoutRes.StatusCode != http.StatusSeeOther {
+		t.Fatalf("logout status = %d", logoutRes.StatusCode)
+	}
+	if location := logoutRes.Header.Get("Location"); location != "/fleet/claims" {
+		t.Fatalf("logout location = %q", location)
+	}
+}
+
+func TestFleetdWebLoginUsesConfiguredUserIDField(t *testing.T) {
+	t.Parallel()
+
+	keys := newTestRS256KeyPair(t)
+	server, baseURL, wsURL := newTestFleetd(t, Config{
+		StoreDSN:          "file:" + filepath.Join(t.TempDir(), "fleetd.db") + "?_pragma=busy_timeout(5000)",
+		MasterKey:         "fleetd-master-key",
+		JWTRS256PublicKey: keys.PublicPEM,
+		JWTUserIDField:    "uid",
+		RuntimeAuthMode:   "api_key",
+		APIKey:            "runtime-key",
+		GatewayToken:      "node-bootstrap-token",
+		TickInterval:      20 * time.Millisecond,
+		RequestTimeout:    2 * time.Second,
+	})
+
+	node := connectTestNode(t, wsURL, testNodeOptions{
+		DisplayName: "UID Node",
+		Token:       "node-bootstrap-token",
+	})
+	defer node.Close()
+
+	claims, err := server.fleet.ListClaims(context.Background())
+	if err != nil {
+		t.Fatalf("list claims: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("expected 1 pending claim, got %d", len(claims))
+	}
+	claim := claims[0]
+
+	client := newNoRedirectClient()
+	loginBody := url.Values{
+		"token":     {signedJWTWithClaims(t, keys.PrivateKey, jwt.MapClaims{"uid": "user-uid"})},
+		"return_to": {"/fleet/claims"},
+	}
+	loginReq, err := http.NewRequest(http.MethodPost, baseURL+"/fleet/login", strings.NewReader(loginBody.Encode()))
+	if err != nil {
+		t.Fatalf("new login request: %v", err)
+	}
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRes, err := client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("login request: %v", err)
+	}
+	defer loginRes.Body.Close()
+	if loginRes.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login status = %d", loginRes.StatusCode)
+	}
+	cookie := loginRes.Cookies()
+	if len(cookie) == 0 || strings.TrimSpace(cookie[0].Value) == "" {
+		t.Fatalf("expected auth cookie to be set")
+	}
+	if location := loginRes.Header.Get("Location"); location != "/fleet/claims" {
+		t.Fatalf("login location = %q", location)
+	}
+
+	pageReq, err := http.NewRequest(http.MethodGet, baseURL+"/fleet/claims", nil)
+	if err != nil {
+		t.Fatalf("new claims page request: %v", err)
+	}
+	pageReq.AddCookie(cookie[0])
+	pageRes, err := http.DefaultClient.Do(pageReq)
+	if err != nil {
+		t.Fatalf("claims page request: %v", err)
+	}
+	defer pageRes.Body.Close()
+	if pageRes.StatusCode != http.StatusOK {
+		t.Fatalf("claims page status = %d", pageRes.StatusCode)
+	}
+	pageBody := new(bytes.Buffer)
+	if _, err := pageBody.ReadFrom(pageRes.Body); err != nil {
+		t.Fatalf("read claims page: %v", err)
+	}
+	if !strings.Contains(pageBody.String(), "当前用户：user-uid") {
+		t.Fatalf("claims page did not render configured user id")
+	}
+
+	deviceSuffix := claim.DeviceID
+	if len(deviceSuffix) > 6 {
+		deviceSuffix = deviceSuffix[len(deviceSuffix)-6:]
+	}
+	approveBody := url.Values{"device_id_suffix": {deviceSuffix}}
+	approveReq, err := http.NewRequest(http.MethodPost, baseURL+"/fleet/claims/"+claim.PairingID+"/approve", strings.NewReader(approveBody.Encode()))
+	if err != nil {
+		t.Fatalf("new approve request: %v", err)
+	}
+	approveReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	approveReq.AddCookie(cookie[0])
+	approveRes, err := client.Do(approveReq)
+	if err != nil {
+		t.Fatalf("approve request: %v", err)
+	}
+	defer approveRes.Body.Close()
+	if approveRes.StatusCode != http.StatusSeeOther {
+		t.Fatalf("approve status = %d", approveRes.StatusCode)
+	}
+	if location := approveRes.Header.Get("Location"); location != "/fleet/nodes" {
+		t.Fatalf("approve location = %q", location)
+	}
+
+	nodes := runtimeListNodes(t, baseURL, "runtime-key", "user-uid")
+	if len(nodes) != 1 || nodes[0].NodeID != node.DeviceID {
+		t.Fatalf("unexpected nodes for configured uid: %+v", nodes)
+	}
+}
+
+func TestFleetdRejectsInvalidConfiguredUserIDClaim(t *testing.T) {
+	t.Parallel()
+
+	keys := newTestRS256KeyPair(t)
+	_, baseURL, _ := newTestFleetd(t, Config{
+		StoreDSN:          "file:" + filepath.Join(t.TempDir(), "fleetd.db") + "?_pragma=busy_timeout(5000)",
+		MasterKey:         "fleetd-master-key",
+		JWTRS256PublicKey: keys.PublicPEM,
+		JWTUserIDField:    "uid",
+		TickInterval:      20 * time.Millisecond,
+		RequestTimeout:    2 * time.Second,
+	})
+
+	testCases := []struct {
+		name   string
+		claims jwt.MapClaims
+	}{
+		{name: "missing", claims: jwt.MapClaims{"sub": "ignored"}},
+		{name: "empty", claims: jwt.MapClaims{"uid": ""}},
+		{name: "non-string", claims: jwt.MapClaims{"uid": 123}},
+	}
+
+	client := newNoRedirectClient()
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, baseURL+"/fleet/claims", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+signedJWTWithClaims(t, keys.PrivateKey, testCase.claims))
+			res, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("claims request: %v", err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusSeeOther {
+				t.Fatalf("claims status = %d", res.StatusCode)
+			}
+			location := res.Header.Get("Location")
+			if !strings.HasPrefix(location, "/fleet/login?return_to=") {
+				t.Fatalf("unexpected redirect location: %q", location)
+			}
+		})
 	}
 }
 
@@ -433,14 +648,46 @@ func (c *testNodeClient) Close() {
 	})
 }
 
-func signedJWT(t *testing.T, secret, subject string) string {
+type testRS256KeyPair struct {
+	PrivateKey *rsa.PrivateKey
+	PublicPEM  string
+}
+
+func newTestRS256KeyPair(t *testing.T) testRS256KeyPair {
 	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": subject})
-	value, err := token.SignedString([]byte(secret))
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal public key: %v", err)
+	}
+	return testRS256KeyPair{
+		PrivateKey: privateKey,
+		PublicPEM: string(pem.EncodeToMemory(&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: publicKeyDER,
+		})),
+	}
+}
+
+func signedJWTWithClaims(t *testing.T, privateKey *rsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	value, err := token.SignedString(privateKey)
 	if err != nil {
 		t.Fatalf("sign jwt: %v", err)
 	}
 	return value
+}
+
+func newNoRedirectClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func runtimeListNodes(t *testing.T, baseURL, apiKey, userID string) []spec.FleetOwnedNode {

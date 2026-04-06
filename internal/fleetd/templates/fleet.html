@@ -42,7 +42,9 @@
       <span class="muted">当前用户：{{.Principal}}</span>
       <a class="button ghost" href="/fleet/claims">设备认领</a>
       <a class="button ghost" href="/fleet/nodes">我的节点</a>
+      {{if .AuthEnabled}}
       <form method="post" action="/fleet/logout"><button class="ghost" type="submit">退出</button></form>
+      {{end}}
     </nav>
   </header>
 

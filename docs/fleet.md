@@ -81,11 +81,8 @@ FLEETD_BASE_URL=http://127.0.0.1:8090
 FLEETD_STORE_DSN=file:fleetd.db?_pragma=busy_timeout(5000)
 FLEETD_MASTER_KEY=change-me
 
-FLEETD_AUTH_MODE=disabled
-FLEETD_JWT_HS256_SECRET=
 FLEETD_JWT_RS256_PUBLIC_KEY=
-FLEETD_JWT_ISSUER=
-FLEETD_JWT_AUDIENCE=
+FLEETD_JWT_USER_ID_FIELD=sub
 
 FLEETD_RUNTIME_AUTH_MODE=api_key
 FLEETD_API_KEY=change-me
@@ -98,7 +95,8 @@ FLEETD_REQUEST_TIMEOUT_MS=30000
 
 字段说明：
 
-- `FLEETD_AUTH_MODE`: Web 页面登录方式，支持 `disabled`、`hs256`、`rs256`
+- `FLEETD_JWT_RS256_PUBLIC_KEY`: 配了就启用 Web 页面 RS256 JWT 登录；留空就不登录，页面用户视为 `anonymous`
+- `FLEETD_JWT_USER_ID_FIELD`: Web 页面登录后，从 JWT payload 的哪个顶层字段读取用户 ID，默认 `sub`
 - `FLEETD_RUNTIME_AUTH_MODE`: runtime API 鉴权方式，支持 `disabled`、`api_key`
 - `FLEETD_API_KEY`: `api_key` 模式下必须匹配的请求头值
 - `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`: 节点首次接入时使用的 bootstrap 凭证，二选一
@@ -143,7 +141,8 @@ FLEETD_BASE_URL=http://127.0.0.1:8090
 FLEETD_STORE_DSN=file:fleetd.db?_pragma=busy_timeout(5000)
 FLEETD_MASTER_KEY=replace-with-a-long-random-string
 
-FLEETD_AUTH_MODE=disabled
+FLEETD_JWT_RS256_PUBLIC_KEY=
+FLEETD_JWT_USER_ID_FIELD=sub
 FLEETD_RUNTIME_AUTH_MODE=api_key
 FLEETD_API_KEY=replace-me
 
@@ -220,13 +219,13 @@ http://127.0.0.1:8090/fleet/claims
 http://127.0.0.1:8090/fleet/nodes
 ```
 
-当前默认配置 `FLEETD_AUTH_MODE=disabled` 时，需要注意：
+当前如果没有配置 `FLEETD_JWT_RS256_PUBLIC_KEY`，需要注意：
 
 - 页面身份固定是 `anonymous`
 - 你在页面上认领的节点，归属用户也会是 `anonymous`
 - 因此 CLI 和 runtime API 示例里必须把 `USER_ID` 设成 `anonymous` 才能看到这些节点
 
-如果你要做真实多用户隔离，不要用 `disabled`，而是配置 `hs256` 或 `rs256`，让页面登录 JWT 的 `sub` 作为用户 ID。
+如果你要做真实多用户隔离，就配置 `FLEETD_JWT_RS256_PUBLIC_KEY`。页面登录后会从 JWT payload 的 `FLEETD_JWT_USER_ID_FIELD` 字段读取用户 ID；默认字段是 `sub`。
 
 ### 5.4 当前怎样减少误认领
 
@@ -256,22 +255,16 @@ http://127.0.0.1:8090/fleet/nodes
 
 ### 6.1 页面鉴权
 
-`FLEETD_AUTH_MODE` 支持：
+Web 页面鉴权只有两种状态：
 
-- `disabled`: 不做页面登录，页面用户视为 `anonymous`
-- `hs256`: 使用 `FLEETD_JWT_HS256_SECRET` 校验 JWT
-- `rs256`: 使用 `FLEETD_JWT_RS256_PUBLIC_KEY` 校验 JWT
+- 未配置 `FLEETD_JWT_RS256_PUBLIC_KEY`: 不做页面登录，页面用户视为 `anonymous`
+- 已配置 `FLEETD_JWT_RS256_PUBLIC_KEY`: 使用 RS256 校验 JWT
 
 当页面鉴权开启时：
 
 - 打开 `/fleet/*` 会先跳转到 `/fleet/login`
 - 登录页只做一件事：把你粘贴的 JWT 放进 cookie
-- 页面里的“当前用户”以及节点隔离都取决于 token 里的 `sub`
-
-可选约束：
-
-- `FLEETD_JWT_ISSUER`
-- `FLEETD_JWT_AUDIENCE`
+- 页面里的“当前用户”以及节点隔离都取决于 token 里 `FLEETD_JWT_USER_ID_FIELD` 指定的顶层字段
 
 ### 6.2 Runtime API 鉴权
 
@@ -686,7 +679,7 @@ curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
 
 最常见原因是用户 ID 不一致：
 
-- 页面在 `FLEETD_AUTH_MODE=disabled` 下认领出的用户是 `anonymous`
+- 页面在未配置 `FLEETD_JWT_RS256_PUBLIC_KEY` 时认领出的用户是 `anonymous`
 - CLI / API 带的是别的 `USER_ID`
 
 ### 11.4 `fleet run` 返回 `approval required`

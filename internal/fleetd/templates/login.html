@@ -22,7 +22,7 @@
   <div class="wrap">
     <section class="card">
       <h1>Fleet</h1>
-      <p>把登录 JWT 写入本地 cookie，页面之后会按 token 的 <code>sub</code> 展示并隔离你的节点。</p>
+      <p>把登录 JWT 写入本地 cookie，页面之后会按 token 的 <code>{{.UserIDField}}</code> 展示并隔离你的节点。</p>
       {{if .LoginError}}<div class="error">{{.LoginError}}</div>{{end}}
       <form method="post" action="/fleet/login">
         <input type="hidden" name="return_to" value="{{.ReturnTo}}">

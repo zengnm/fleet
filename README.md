@@ -53,7 +53,7 @@ go run ./cmd/fleet list
 
 说明：
 
-- 默认示例里 `FLEETD_AUTH_MODE=disabled`，页面认领产生的用户是 `anonymous`
+- 默认示例里没有配置 `FLEETD_JWT_RS256_PUBLIC_KEY`，页面认领产生的用户是 `anonymous`
 - `openclaw node run --host/--port` 直接连接 `fleetd` 根路径
 - 更完整的配置、鉴权、API、反向代理和故障排查见 [docs/fleet.md](/Users/zengnianmei/workspace/source/fleetd/docs/fleet.md)
 

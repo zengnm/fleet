@@ -37,6 +37,8 @@ type pageData struct {
 	ReturnTo   string
 	LoginError string
 	Principal  string
+	AuthEnabled bool
+	UserIDField string
 	Error      string
 	Claims     []spec.FleetPendingClaim
 	Nodes      []spec.FleetOwnedNode
@@ -145,11 +147,15 @@ func (s *Server) handleFleetRoot(w http.ResponseWriter, r *http.Request, _ *Prin
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled() {
+		http.Redirect(w, r, "/fleet/claims", http.StatusSeeOther)
+		return
+	}
 	returnTo := strings.TrimSpace(r.URL.Query().Get("return_to"))
 	if returnTo == "" {
 		returnTo = "/fleet/claims"
 	}
-	_ = s.templates.ExecuteTemplate(w, "login.html", pageData{
+	s.renderPage(w, pageData{
 		Title:      "Fleet 登录",
 		Page:       "login",
 		ReturnTo:   returnTo,
@@ -158,6 +164,10 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled() {
+		http.Redirect(w, r, "/fleet/claims", http.StatusSeeOther)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, "/fleet/login?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
@@ -177,6 +187,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled() {
+		http.Redirect(w, r, "/fleet/claims", http.StatusSeeOther)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     fleetCookieName,
 		Value:    "",
@@ -368,6 +382,11 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code string, err 
 func (s *Server) renderPage(w http.ResponseWriter, data pageData) {
 	if strings.TrimSpace(data.Principal) == "" {
 		data.Principal = "anonymous"
+	}
+	data.AuthEnabled = s.auth.Enabled()
+	data.UserIDField = strings.TrimSpace(s.cfg.JWTUserIDField)
+	if data.UserIDField == "" {
+		data.UserIDField = "sub"
 	}
 	if data.Page == "login" {
 		_ = s.templates.ExecuteTemplate(w, "login.html", data)

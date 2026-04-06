@@ -15,14 +15,11 @@ type Config struct {
 	BaseURL         string
 	StoreDSN        string
 	MasterKey       string
-	AuthMode        string
 	RuntimeAuthMode string
 	APIKey          string
 
-	JWTHS256Secret    string
 	JWTRS256PublicKey string
-	JWTIssuer         string
-	JWTAudience       string
+	JWTUserIDField    string
 
 	GatewayToken    string
 	GatewayPassword string
@@ -43,13 +40,10 @@ func LoadConfig() Config {
 		BaseURL:           fleetValue(values, "FLEETD_BASE_URL", "http://127.0.0.1:8090"),
 		StoreDSN:          fleetValue(values, "FLEETD_STORE_DSN", "file:fleetd.db?_pragma=busy_timeout(5000)"),
 		MasterKey:         fleetValue(values, "FLEETD_MASTER_KEY", "development-master-key-change-me"),
-		AuthMode:          fleetValue(values, "FLEETD_AUTH_MODE", "disabled"),
 		RuntimeAuthMode:   fleetValue(values, "FLEETD_RUNTIME_AUTH_MODE", "disabled"),
 		APIKey:            fleetValue(values, "FLEETD_API_KEY", ""),
-		JWTHS256Secret:    fleetValue(values, "FLEETD_JWT_HS256_SECRET", ""),
 		JWTRS256PublicKey: fleetValue(values, "FLEETD_JWT_RS256_PUBLIC_KEY", ""),
-		JWTIssuer:         fleetValue(values, "FLEETD_JWT_ISSUER", ""),
-		JWTAudience:       fleetValue(values, "FLEETD_JWT_AUDIENCE", ""),
+		JWTUserIDField:    fleetValue(values, "FLEETD_JWT_USER_ID_FIELD", "sub"),
 		GatewayToken:      fleetValue(values, "FLEETD_GATEWAY_TOKEN", ""),
 		GatewayPassword:   fleetValue(values, "FLEETD_GATEWAY_PASSWORD", ""),
 		TickInterval:      time.Duration(fleetValueInt(values, "FLEETD_TICK_INTERVAL_MS", 15000)) * time.Millisecond,
