@@ -69,4 +69,3 @@ go test ./...
 
 - 当前只实现了headless类型的节点，其它类型待实现
 - 不用依赖openclaw node，实现自己的cli注册节点
-- 因为openclaw node限制，无法解决节点误认领的情况。应该由fleetd发送认领码给注册客户端，用户在认领页填写即认领

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"fleetd/pkg/spec"
 )
@@ -54,39 +56,33 @@ func (c *Client) Run(ctx context.Context, args []string) error {
 		c.renderHelp()
 		return nil
 	}
-	if args[0] == "nodes" {
-		return errors.New("`fleet nodes ...` has been removed; use `fleet <subcommand>`")
-	}
 	switch args[0] {
-	case "list":
-		return c.listNodes(ctx)
-	case "status", "describe":
-		if len(args) < 2 {
-			return errors.New("missing node id")
-		}
-		return c.describeNode(ctx, args[1])
+	case "status":
+		return c.statusNodes(ctx, args[1:])
+	case "describe":
+		return c.describeNode(ctx, args[1:])
 	case "invoke":
 		return c.invokeNode(ctx, args[1:])
-	case "run":
-		return c.runNode(ctx, args[1:])
 	default:
 		return fmt.Errorf("unsupported subcommand %q", args[0])
 	}
 }
 
-func (c *Client) listNodes(ctx context.Context) error {
-	var response struct {
-		Status string                `json:"status"`
-		Nodes  []spec.FleetOwnedNode `json:"nodes"`
+func (c *Client) statusNodes(ctx context.Context, args []string) error {
+	options, err := parseListOptions(args)
+	if err != nil {
+		return errors.New("usage: fleet status [--connected] [--last-connected <duration>]")
 	}
-	if err := c.doJSON(ctx, http.MethodGet, "/runtime/fleet/nodes", nil, &response); err != nil {
+	nodes, err := c.fetchNodes(ctx)
+	if err != nil {
 		return err
 	}
-	if len(response.Nodes) == 0 {
+	nodes = filterNodes(nodes, options, time.Now().UTC())
+	if len(nodes) == 0 {
 		_, _ = fmt.Fprintln(c.stdout, "no nodes")
 		return nil
 	}
-	for _, node := range response.Nodes {
+	for _, node := range nodes {
 		name := node.DisplayName
 		if name == "" {
 			name = node.NodeID
@@ -96,41 +92,57 @@ func (c *Client) listNodes(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) describeNode(ctx context.Context, nodeID string) error {
+func (c *Client) fetchNodes(ctx context.Context) ([]spec.FleetOwnedNode, error) {
+	var response struct {
+		Status string                `json:"status"`
+		Nodes  []spec.FleetOwnedNode `json:"nodes"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/runtime/fleet/nodes", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Nodes, nil
+}
+
+func (c *Client) describeNode(ctx context.Context, args []string) error {
+	selector, err := parseNodeSelector("describe", args)
+	if err != nil {
+		return err
+	}
+	node, err := c.resolveNode(ctx, selector)
+	if err != nil {
+		return err
+	}
 	var response struct {
 		Status string              `json:"status"`
 		Node   spec.FleetOwnedNode `json:"node"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, "/runtime/fleet/nodes/"+nodeID, nil, &response); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/runtime/fleet/nodes/"+node.NodeID, nil, &response); err != nil {
 		return err
 	}
 	return c.renderNode(response.Node)
 }
 
 func (c *Client) invokeNode(ctx context.Context, args []string) error {
-	if len(args) < 2 {
-		return errors.New("usage: fleet invoke <node-id> <command> [--json '{...}']")
+	options, err := parseInvokeOptions(args)
+	if err != nil {
+		return err
 	}
-	nodeID := args[0]
-	command := args[1]
+	node, err := c.resolveNode(ctx, options.node)
+	if err != nil {
+		return err
+	}
 	payload := map[string]any{}
-	if len(args) > 2 {
-		for index := 2; index < len(args); index++ {
-			if args[index] != "--json" || index+1 >= len(args) {
-				return errors.New("usage: fleet invoke <node-id> <command> [--json '{...}']")
-			}
-			index++
-			if err := json.Unmarshal([]byte(args[index]), &payload); err != nil {
-				return fmt.Errorf("invalid --json payload: %w", err)
-			}
+	if strings.TrimSpace(options.params) != "" {
+		if err := json.Unmarshal([]byte(options.params), &payload); err != nil {
+			return fmt.Errorf("invalid --params payload: %w", err)
 		}
 	}
 	var response struct {
 		Status string                   `json:"status"`
 		Result spec.FleetInvokeResponse `json:"result"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/runtime/fleet/nodes/"+nodeID+"/invoke", spec.FleetInvokeRequest{
-		Command: command,
+	if err := c.doJSON(ctx, http.MethodPost, "/runtime/fleet/nodes/"+node.NodeID+"/invoke", spec.FleetInvokeRequest{
+		Command: options.command,
 		Params:  payload,
 	}, &response); err != nil {
 		return err
@@ -138,53 +150,138 @@ func (c *Client) invokeNode(ctx context.Context, args []string) error {
 	return c.renderInvokeResult(response.Result)
 }
 
-func (c *Client) runNode(ctx context.Context, args []string) error {
-	if len(args) < 3 {
-		return errors.New("usage: fleet run <node-id> [--json] -- <command> [args...]")
+func (c *Client) resolveNode(ctx context.Context, selector string) (spec.FleetOwnedNode, error) {
+	nodes, err := c.fetchNodes(ctx)
+	if err != nil {
+		return spec.FleetOwnedNode{}, err
 	}
-	nodeID := args[0]
-	outputJSON := false
-	separator := -1
-	for index, value := range args[1:] {
-		switch value {
-		case "--json":
-			outputJSON = true
-		case "--":
-			separator = index + 1
-		default:
-			if separator == -1 {
-				return errors.New("usage: fleet run <node-id> [--json] -- <command> [args...]")
+	selector = strings.TrimSpace(selector)
+	matches := make([]spec.FleetOwnedNode, 0, 1)
+	for _, node := range nodes {
+		if selector == node.NodeID || selector == node.DisplayName || selector == node.RemoteIP {
+			matches = append(matches, node)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return spec.FleetOwnedNode{}, errors.New("node not found")
+	case 1:
+		return matches[0], nil
+	default:
+		candidates := make([]string, 0, len(matches))
+		for _, node := range matches {
+			name := node.DisplayName
+			if name == "" {
+				name = "-"
 			}
+			ip := node.RemoteIP
+			if ip == "" {
+				ip = "-"
+			}
+			candidates = append(candidates, fmt.Sprintf("%s(name=%s, ip=%s)", node.NodeID, name, ip))
 		}
-		if separator != -1 {
-			break
-		}
+		sort.Strings(candidates)
+		return spec.FleetOwnedNode{}, fmt.Errorf("ambiguous node selector %q: %s", selector, strings.Join(candidates, ", "))
 	}
-	if separator == -1 || separator+1 >= len(args) {
-		return errors.New("usage: fleet run <node-id> [--json] -- <command> [args...]")
-	}
-	command := args[separator+1:]
-	var response struct {
-		Status string                `json:"status"`
-		Result spec.FleetRunResponse `json:"result"`
-	}
-	if err := c.doJSON(ctx, http.MethodPost, "/runtime/fleet/nodes/"+nodeID+"/run", spec.FleetRunRequest{
-		Command: command,
-	}, &response); err != nil {
-		return err
-	}
-	if outputJSON {
-		return json.NewEncoder(c.stdout).Encode(response.Result)
-	}
-	return c.renderRunResult(response.Result)
 }
 
-func (c *Client) renderRunResult(result spec.FleetRunResponse) error {
-	stdout, _ := result.Result["stdout"].(string)
-	stderr, _ := result.Result["stderr"].(string)
-	exitCode, hasExitCode := intValue(result.Result["exitCode"])
-	timedOut, _ := result.Result["timedOut"].(bool)
-	success, _ := result.Result["success"].(bool)
+type listOptions struct {
+	connected     bool
+	lastConnected time.Duration
+}
+
+func parseListOptions(args []string) (listOptions, error) {
+	var options listOptions
+	var lastConnected string
+	fs := newFlagSet("list")
+	fs.BoolVar(&options.connected, "connected", false, "")
+	fs.StringVar(&lastConnected, "last-connected", "", "")
+	if err := fs.Parse(args); err != nil {
+		return listOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return listOptions{}, errors.New("unexpected arguments")
+	}
+	if strings.TrimSpace(lastConnected) != "" {
+		duration, err := time.ParseDuration(lastConnected)
+		if err != nil {
+			return listOptions{}, err
+		}
+		options.lastConnected = duration
+	}
+	return options, nil
+}
+
+func parseNodeSelector(command string, args []string) (string, error) {
+	fs := newFlagSet(command)
+	var node string
+	fs.StringVar(&node, "node", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(node) == "" {
+		return "", fmt.Errorf("usage: fleet %s --node <id|name|ip>", command)
+	}
+	return node, nil
+}
+
+type invokeOptions struct {
+	node    string
+	command string
+	params  string
+}
+
+func parseInvokeOptions(args []string) (invokeOptions, error) {
+	var options invokeOptions
+	fs := newFlagSet("invoke")
+	fs.StringVar(&options.node, "node", "", "")
+	fs.StringVar(&options.command, "command", "", "")
+	fs.StringVar(&options.params, "params", "", "")
+	if err := fs.Parse(args); err != nil {
+		return invokeOptions{}, err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(options.node) == "" || strings.TrimSpace(options.command) == "" {
+		return invokeOptions{}, errors.New("usage: fleet invoke --node <id|name|ip> --command <command> [--params <json>]")
+	}
+	return options, nil
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+func filterNodes(nodes []spec.FleetOwnedNode, options listOptions, now time.Time) []spec.FleetOwnedNode {
+	filtered := make([]spec.FleetOwnedNode, 0, len(nodes))
+	for _, node := range nodes {
+		if options.connected && !node.Connected {
+			continue
+		}
+		if options.lastConnected > 0 {
+			lastConnected := node.LastSeenAt
+			if lastConnected.IsZero() {
+				lastConnected = node.ConnectedAt
+			}
+			if lastConnected.IsZero() || now.Sub(lastConnected) > options.lastConnected {
+				continue
+			}
+		}
+		filtered = append(filtered, node)
+	}
+	return filtered
+}
+
+func (c *Client) renderRunPayload(payload any) error {
+	result, ok := payload.(map[string]any)
+	if !ok {
+		return c.renderGenericPayload(payload)
+	}
+	stdout, _ := result["stdout"].(string)
+	stderr, _ := result["stderr"].(string)
+	exitCode, hasExitCode := intValue(result["exitCode"])
+	timedOut, _ := result["timedOut"].(bool)
+	success, _ := result["success"].(bool)
 
 	if stdout != "" {
 		_, _ = io.WriteString(c.stdout, stdout)
@@ -248,21 +345,23 @@ func (c *Client) renderNode(node spec.FleetOwnedNode) error {
 }
 
 func (c *Client) renderInvokeResult(result spec.FleetInvokeResponse) error {
-	if !result.OK {
-		if invokeErr := invokeErrorMessage(result); invokeErr != "" {
-			return errors.New(invokeErr)
-		}
-		return errors.New("invoke failed")
-	}
 	payload, err := decodeInvokePayload(result)
 	if err != nil {
 		return err
+	}
+	if !result.OK {
+		if invokeErr := invokeErrorMessage(payload); invokeErr != "" {
+			return errors.New(invokeErr)
+		}
+		return errors.New("invoke failed")
 	}
 	switch result.Command {
 	case "system.execApprovals.get":
 		return c.renderApprovalsPayload(payload)
 	case "system.run.prepare":
 		return c.renderPreparedRunPayload(payload)
+	case "system.run":
+		return c.renderRunPayload(payload)
 	case "system.which":
 		return c.renderWhichPayload(payload)
 	default:
@@ -384,8 +483,8 @@ func decodeInvokePayload(result spec.FleetInvokeResponse) (any, error) {
 	return payload, nil
 }
 
-func invokeErrorMessage(result spec.FleetInvokeResponse) string {
-	object, ok := result.Payload.(map[string]any)
+func invokeErrorMessage(payload any) string {
+	object, ok := payload.(map[string]any)
 	if !ok {
 		return ""
 	}
@@ -567,9 +666,22 @@ func (c *Client) doJSON(ctx context.Context, method, path string, requestBody an
 }
 
 func (c *Client) renderHelp() {
-	_, _ = fmt.Fprintln(c.stdout, "fleet list")
-	_, _ = fmt.Fprintln(c.stdout, "fleet status <node-id>")
-	_, _ = fmt.Fprintln(c.stdout, "fleet describe <node-id>")
-	_, _ = fmt.Fprintln(c.stdout, "fleet invoke <node-id> <command> --json '{...}'")
-	_, _ = fmt.Fprintln(c.stdout, "fleet run <node-id> [--json] -- <command> [args...]")
+	_, _ = fmt.Fprintln(c.stdout, "fleet controls connected nodes through status, describe, and invoke.")
+	_, _ = fmt.Fprintln(c.stdout, "")
+	_, _ = fmt.Fprintln(c.stdout, "Commands:")
+	_, _ = fmt.Fprintln(c.stdout, "  fleet status [--connected] [--last-connected <duration>]")
+	_, _ = fmt.Fprintln(c.stdout, "  fleet describe --node <id|name|ip>")
+	_, _ = fmt.Fprintln(c.stdout, "  fleet invoke --node <id|name|ip> --command <command> [--params <json>]")
+	_, _ = fmt.Fprintln(c.stdout, "")
+	_, _ = fmt.Fprintln(c.stdout, "Examples:")
+	_, _ = fmt.Fprintln(c.stdout, `  fleet status --connected`)
+	_, _ = fmt.Fprintln(c.stdout, `  fleet describe --node "Build Node"`)
+	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.which --params '{"name":"git","bins":["/usr/bin/git"]}'`)
+	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'`)
+	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.run --params '{"command":["uname","-a"]}'`)
+	_, _ = fmt.Fprintln(c.stdout, "")
+	_, _ = fmt.Fprintln(c.stdout, "Notes:")
+	_, _ = fmt.Fprintln(c.stdout, "  Use describe to inspect commands before invoke.")
+	_, _ = fmt.Fprintln(c.stdout, "  Use invoke with system.run.prepare to preview execution.")
+	_, _ = fmt.Fprintln(c.stdout, "  Use invoke with system.run for remote execution.")
 }

@@ -31,8 +31,8 @@ openclaw node ---> fleetd ---> fleet Web / fleet CLI
 - `GET /healthz`
 - 打开 `/fleet/claims` 并看到待认领设备
 - `POST /fleet/claims/{pairingID}/approve`
-- `go run ./cmd/fleet list`
-- `go run ./cmd/fleet describe <node-id>`
+- `go run ./cmd/fleet status`
+- `go run ./cmd/fleet describe --node <node-id>`
 - `GET /runtime/fleet/nodes`
 
 另外确认过当前本机 `openclaw` 2026.3.8 的命令行语法：
@@ -47,7 +47,7 @@ openclaw node ---> fleetd ---> fleet Web / fleet CLI
 
 有两点需要特别说明：
 
-- `fleet run` 语法是正确的，但真实 OpenClaw 节点默认可能返回 `approval required`；这取决于节点主机的 exec approvals 配置，不是 `fleetd` 路由错误。
+- `fleet` 的远程执行统一走 `fleet invoke --command system.run`；真实 OpenClaw 节点默认仍可能返回 `approval required`，这取决于节点主机的 exec approvals 配置，不是 `fleetd` 路由错误。
 - `system.which` 的参数要求会随节点实现变化；本文不再把它当作“复制即成功”的示例。
 
 ## 3. 端点总览
@@ -313,35 +313,28 @@ FLEET_API_KEY=replace-me
 USER_ID=anonymous
 ```
 
-CLI 现在推荐直接使用：
+CLI 现在只保留 3 个命令：
 
-- `fleet list`
-- `fleet describe`
-- `fleet invoke`
-- `fleet run`
+- `fleet status`
+- `fleet describe --node <id|name|ip>`
+- `fleet invoke --node <id|name|ip> --command <command> [--params <json>]`
 
-列出节点：
+状态视图：
 
 ```bash
-go run ./cmd/fleet list
+go run ./cmd/fleet status
 ```
 
 查看详情：
 
 ```bash
-go run ./cmd/fleet describe <node-id>
-```
-
-查看状态：
-
-```bash
-go run ./cmd/fleet status <node-id>
+go run ./cmd/fleet describe --node <node-id>
 ```
 
 通用 invoke 形态：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> <command> --json '{"key":"value"}'
+go run ./cmd/fleet invoke --node <node-id> --command <command> --params '{"key":"value"}'
 ```
 
 下面这些例子已经在真实节点上验证通过：
@@ -349,19 +342,25 @@ go run ./cmd/fleet invoke <node-id> <command> --json '{"key":"value"}'
 读取节点主机的 exec approvals：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> system.execApprovals.get --json '{}'
+go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.get --params '{}'
 ```
 
 准备一次 `system.run` 计划：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> system.run.prepare --json '{"command":["uname","-a"],"rawCommand":"uname -a"}'
+go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'
+```
+
+执行一次 `system.run`：
+
+```bash
+go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
 ```
 
 `system.which` 的可执行示例：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> system.which --json '{"name":"git","bins":["/usr/bin/git","/opt/homebrew/bin/git"]}'
+go run ./cmd/fleet invoke --node <node-id> --command system.which --params '{"name":"git","bins":["/usr/bin/git","/opt/homebrew/bin/git"]}'
 ```
 
 说明：
@@ -377,7 +376,7 @@ go run ./cmd/fleet invoke <node-id> system.which --json '{"name":"git","bins":["
 先确认节点是否真的暴露了浏览器代理命令：
 
 ```bash
-go run ./cmd/fleet describe <node-id>
+go run ./cmd/fleet describe --node <node-id>
 ```
 
 至少满足其一才继续：
@@ -390,7 +389,7 @@ go run ./cmd/fleet describe <node-id>
 先打开一个页面：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
   "method": "POST",
   "path": "/tabs/open",
   "body": {
@@ -403,7 +402,7 @@ go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
 列出现有标签页：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
   "method": "GET",
   "path": "/tabs",
   "timeoutMs": 20000
@@ -413,7 +412,7 @@ go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
 拿到 `targetId` 后再导航：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
   "method": "POST",
   "path": "/navigate",
   "body": {
@@ -427,7 +426,7 @@ go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
 抓取页面 snapshot：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
   "method": "GET",
   "path": "/snapshot",
   "query": {
@@ -441,7 +440,7 @@ go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
 如果 snapshot 返回了可点击元素的 `ref`，再做一次点击：
 
 ```bash
-go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
+go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
   "method": "POST",
   "path": "/act",
   "body": {
@@ -463,33 +462,27 @@ go run ./cmd/fleet invoke <node-id> browser.proxy --json '{
 远程执行形态：
 
 ```bash
-go run ./cmd/fleet run <node-id> -- uname -a
-```
-
-默认会直接输出远端命令的 stdout/stderr；如果你需要机器可读结果，再加：
-
-```bash
-go run ./cmd/fleet run <node-id> --json -- uname -a
+go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
 ```
 
 这个例子我已经实测通过，但前提是先在节点主机放行目标可执行文件：
 
 ```bash
 openclaw approvals allowlist add "/usr/bin/uname"
-go run ./cmd/fleet run <node-id> -- uname -a
+go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
 ```
 
 再补一个容易走通的例子：
 
 ```bash
 openclaw approvals allowlist add "/usr/bin/sw_vers"
-go run ./cmd/fleet run <node-id> -- sw_vers
+go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["sw_vers"]}'
 ```
 
 注意：
 
 - `invoke` 能否成功，取决于节点实际暴露的 `commands` 和参数要求
-- `run` 在真实节点上会受节点主机本地 exec approvals 约束
+- `system.run` 在真实节点上会受节点主机本地 exec approvals 约束
 - 在当前 `fleetd` 独立模式下，最直接可行的处理方式是在节点主机本机执行 `openclaw approvals ...`
 
 ## 8. Runtime HTTP API 示例
@@ -707,7 +700,7 @@ curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
 - 页面在未配置 `FLEETD_JWT_RS256_PUBLIC_KEY` 时认领出的用户是 `anonymous`
 - CLI / API 带的是别的 `USER_ID`
 
-### 11.4 `fleet run` 返回 `approval required`
+### 11.4 `fleet invoke --command system.run` 返回 `approval required`
 
 这是节点主机的执行审批策略，不是 `fleetd` 路由错误。
 
@@ -716,8 +709,8 @@ curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
 1. 先确认节点在线，并且命令声明没问题：
 
 ```bash
-go run ./cmd/fleet describe <node-id>
-go run ./cmd/fleet invoke <node-id> system.run.prepare --json '{"command":["uname","-a"],"rawCommand":"uname -a"}'
+go run ./cmd/fleet describe --node <node-id>
+go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'
 ```
 
 2. 在节点主机本机查看 approvals：
@@ -735,7 +728,7 @@ openclaw approvals allowlist add "/usr/bin/uname"
 4. 然后重试：
 
 ```bash
-go run ./cmd/fleet run <node-id> -- uname -a
+go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
 ```
 
 5. 如果还不行，再看 JSON 版状态：

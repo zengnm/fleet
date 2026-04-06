@@ -2,13 +2,17 @@ package fleetcli
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestClientListNodes(t *testing.T) {
+func TestClientStatusNodes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/runtime/fleet/nodes" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -36,7 +40,7 @@ func TestClientListNodes(t *testing.T) {
 		UserID:  "user-a",
 		Stdout:  &stdout,
 	})
-	if err := client.Run(context.Background(), []string{"list"}); err != nil {
+	if err := client.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "node-1") || !strings.Contains(stdout.String(), "online") {
@@ -44,20 +48,159 @@ func TestClientListNodes(t *testing.T) {
 	}
 }
 
-func TestClientRejectsRemovedNodesPrefix(t *testing.T) {
-	client := New(Config{})
-	err := client.Run(context.Background(), []string{"nodes", "list"})
-	if err == nil || !strings.Contains(err.Error(), "has been removed") {
+func TestClientStatusFiltersNodes(t *testing.T) {
+	now := time.Now().UTC()
+	payload := fmt.Sprintf(`{"status":"ok","nodes":[
+		{"node_id":"node-1","display_name":"Build Node","status":"online","connected":true,"last_seen_at":"%s"},
+		{"node_id":"node-2","display_name":"Old Node","status":"offline","connected":false,"last_seen_at":"%s"}
+	]}`, now.Format(time.RFC3339Nano), now.Add(-48*time.Hour).Format(time.RFC3339Nano))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/runtime/fleet/nodes" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer server.Close()
+
+	var stdout strings.Builder
+	client := New(Config{
+		BaseURL: server.URL,
+		Stdout:  &stdout,
+	})
+	if err := client.Run(context.Background(), []string{"status", "--connected", "--last-connected", "24h"}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "node-1") {
+		t.Fatalf("expected connected node in output: %s", output)
+	}
+	if strings.Contains(output, "node-2") {
+		t.Fatalf("unexpected stale node in output: %s", output)
+	}
+}
+
+func TestClientDescribeResolvesNodeSelectors(t *testing.T) {
+	testCases := []struct {
+		name     string
+		selector string
+	}{
+		{name: "node id", selector: "node-1"},
+		{name: "display name", selector: "Build Node"},
+		{name: "remote ip", selector: "10.0.0.8"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/runtime/fleet/nodes":
+					_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","remote_ip":"10.0.0.8","status":"online"}]}`))
+				case "/runtime/fleet/nodes/node-1":
+					_, _ = w.Write([]byte(`{"status":"ok","node":{"node_id":"node-1","display_name":"Build Node","remote_ip":"10.0.0.8","status":"online","connected":true,"paired":true}}`))
+				default:
+					t.Fatalf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			var stdout strings.Builder
+			client := New(Config{
+				BaseURL: server.URL,
+				Stdout:  &stdout,
+			})
+			if err := client.Run(context.Background(), []string{"describe", "--node", testCase.selector}); err != nil {
+				t.Fatalf("Run failed: %v", err)
+			}
+			output := stdout.String()
+			if !strings.Contains(output, "ID: node-1") || !strings.Contains(output, "Name: Build Node") {
+				t.Fatalf("unexpected output: %s", output)
+			}
+		})
+	}
+}
+
+func TestClientDescribeRejectsAmbiguousSelector(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/runtime/fleet/nodes" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","nodes":[
+			{"node_id":"node-1","display_name":"Build Node","remote_ip":"10.0.0.8","status":"online"},
+			{"node_id":"node-2","display_name":"Build Node","remote_ip":"10.0.0.9","status":"online"}
+		]}`))
+	}))
+	defer server.Close()
+
+	client := New(Config{BaseURL: server.URL})
+	err := client.Run(context.Background(), []string{"describe", "--node", "Build Node"})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous node selector") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestClientRunNodeDefaultsToPlainText(t *testing.T) {
+func TestClientInvokePassesParams(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/runtime/fleet/nodes/node-1/run" {
+		switch r.URL.Path {
+		case "/runtime/fleet/nodes":
+			_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","status":"online"}]}`))
+		case "/runtime/fleet/nodes/node-1/invoke":
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var request struct {
+				Command string         `json:"command"`
+				Params  map[string]any `json:"params"`
+			}
+			if err := json.Unmarshal(raw, &request); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if request.Command != "custom.echo" {
+				t.Fatalf("unexpected command: %s", request.Command)
+			}
+			if request.Params["message"] != "hello" {
+				t.Fatalf("unexpected params: %+v", request.Params)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","command":"custom.echo","ok":true,"payload":{"message":"hello","count":2,"items":["a","b"]}}}`))
+		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","accepted":true,"result":{"stdout":"hello\n","stderr":"warn\n","exitCode":0,"success":true,"timedOut":false}}}`))
+	}))
+	defer server.Close()
+
+	var stdout strings.Builder
+	client := New(Config{
+		BaseURL: server.URL,
+		Stdout:  &stdout,
+	})
+	err := client.Run(context.Background(), []string{
+		"invoke",
+		"--node", "Build Node",
+		"--command", "custom.echo",
+		"--params", `{"message":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	output := stdout.String()
+	if strings.Contains(output, "{") || strings.Contains(output, `"message"`) {
+		t.Fatalf("unexpected json output: %s", output)
+	}
+	if !strings.Contains(output, "message: hello") || !strings.Contains(output, "count: 2") || !strings.Contains(output, "- a") {
+		t.Fatalf("unexpected plain-text output: %s", output)
+	}
+}
+
+func TestClientInvokeSystemRunWritesStreams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runtime/fleet/nodes":
+			_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","status":"online"}]}`))
+		case "/runtime/fleet/nodes/node-1/invoke":
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","command":"system.run","ok":true,"payload":{"stdout":"hello\n","stderr":"warn\n","exitCode":0,"success":true,"timedOut":false}}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -68,7 +211,13 @@ func TestClientRunNodeDefaultsToPlainText(t *testing.T) {
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	})
-	if err := client.Run(context.Background(), []string{"run", "node-1", "--", "echo", "hello"}); err != nil {
+	err := client.Run(context.Background(), []string{
+		"invoke",
+		"--node", "Build Node",
+		"--command", "system.run",
+		"--params", `{"command":["echo","hello"]}`,
+	})
+	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 	if stdout.String() != "hello\n" {
@@ -79,44 +228,84 @@ func TestClientRunNodeDefaultsToPlainText(t *testing.T) {
 	}
 }
 
-func TestClientRunNodeJSONOutput(t *testing.T) {
+func TestClientInvokeSystemRunReturnsExitError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","accepted":true,"result":{"stdout":"hello\n","exitCode":0,"success":true,"timedOut":false}}}`))
+		switch r.URL.Path {
+		case "/runtime/fleet/nodes":
+			_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","status":"online"}]}`))
+		case "/runtime/fleet/nodes/node-1/invoke":
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","command":"system.run","ok":true,"payload":{"stdout":"","stderr":"boom\n","exitCode":7,"success":false,"timedOut":false}}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
-	var stdout strings.Builder
+	var stderr strings.Builder
 	client := New(Config{
 		BaseURL: server.URL,
-		Stdout:  &stdout,
+		Stderr:  &stderr,
 	})
-	if err := client.Run(context.Background(), []string{"run", "node-1", "--json", "--", "echo", "hello"}); err != nil {
-		t.Fatalf("Run failed: %v", err)
+	err := client.Run(context.Background(), []string{
+		"invoke",
+		"--node", "Build Node",
+		"--command", "system.run",
+		"--params", `{"command":["false"]}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "run exit 7") {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"node_id":"node-1"`) {
-		t.Fatalf("unexpected json output: %s", stdout.String())
+	if stderr.String() != "boom\n" {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
 
-func TestClientInvokeDefaultsToPlainText(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","command":"custom.echo","ok":true,"payload":{"message":"hello","count":2,"items":["a","b"]}}}`))
-	}))
-	defer server.Close()
+func TestClientRejectsRemovedCLIForms(t *testing.T) {
+	client := New(Config{})
 
+	err := client.Run(context.Background(), []string{"run", "--node", "node-1"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported subcommand "run"`) {
+		t.Fatalf("unexpected run error: %v", err)
+	}
+
+	err = client.Run(context.Background(), []string{"list"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported subcommand "list"`) {
+		t.Fatalf("unexpected list error: %v", err)
+	}
+
+	err = client.Run(context.Background(), []string{"invoke", "node-1", "custom.echo"})
+	if err == nil || !strings.Contains(err.Error(), "usage: fleet invoke --node <id|name|ip> --command <command> [--params <json>]") {
+		t.Fatalf("unexpected positional invoke error: %v", err)
+	}
+}
+
+func TestClientHelpOnlyShowsNewCommands(t *testing.T) {
 	var stdout strings.Builder
-	client := New(Config{
-		BaseURL: server.URL,
-		Stdout:  &stdout,
-	})
-	if err := client.Run(context.Background(), []string{"invoke", "node-1", "custom.echo", "--json", "{}"}); err != nil {
+	client := New(Config{Stdout: &stdout})
+
+	if err := client.Run(context.Background(), []string{"help"}); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
+
 	output := stdout.String()
-	if strings.Contains(output, "{") || strings.Contains(output, "\"message\"") {
-		t.Fatalf("unexpected json output: %s", output)
+	for _, expected := range []string{
+		"fleet status [--connected] [--last-connected <duration>]",
+		"fleet describe --node <id|name|ip>",
+		"fleet invoke --node <id|name|ip> --command <command> [--params <json>]",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("missing help entry %q in %s", expected, output)
+		}
 	}
-	if !strings.Contains(output, "message: hello") || !strings.Contains(output, "count: 2") || !strings.Contains(output, "- a") {
-		t.Fatalf("unexpected plain-text output: %s", output)
+	for _, unexpected := range []string{
+		"fleet run",
+		"fleet list",
+		"--json",
+		"fleet describe <node-id>",
+		"fleet invoke <node-id>",
+	} {
+		if strings.Contains(output, unexpected) {
+			t.Fatalf("unexpected legacy help entry %q in %s", unexpected, output)
+		}
 	}
 }
