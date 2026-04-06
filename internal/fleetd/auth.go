@@ -1,10 +1,10 @@
 package fleetd
 
 import (
-	"encoding/base64"
 	"crypto/rsa"
 	"crypto/subtle"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -103,14 +103,14 @@ func (a *RuntimeAuthenticator) Authenticate(r *http.Request) (*Principal, error)
 	case "", "disabled":
 		return &Principal{Subject: "anonymous", Raw: jwt.MapClaims{}}, nil
 	case "api_key":
-		apiKey := strings.TrimSpace(r.Header.Get("API_KEY"))
+		apiKey := firstHeaderValue(r, "API_KEY", "X-API-Key")
 		if apiKey == "" {
 			return nil, errors.New("missing API_KEY header")
 		}
 		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(a.apiKey)) != 1 {
 			return nil, errors.New("invalid API_KEY header")
 		}
-		userID := strings.TrimSpace(r.Header.Get("USER_ID"))
+		userID := firstHeaderValue(r, "USER_ID", "X-User-Id")
 		if userID == "" {
 			return nil, errors.New("missing USER_ID header")
 		}
@@ -128,6 +128,15 @@ func fleetBearerToken(r *http.Request) string {
 	cookie, err := r.Cookie(fleetCookieName)
 	if err == nil && strings.TrimSpace(cookie.Value) != "" {
 		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
+}
+
+func firstHeaderValue(r *http.Request, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(r.Header.Get(name)); value != "" {
+			return value
+		}
 	}
 	return ""
 }

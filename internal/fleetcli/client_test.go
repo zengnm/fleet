@@ -16,8 +16,14 @@ func TestClientListNodes(t *testing.T) {
 		if r.Header.Get("API_KEY") != "runtime-key" {
 			t.Fatalf("missing API key header")
 		}
+		if r.Header.Get("X-API-Key") != "runtime-key" {
+			t.Fatalf("missing x-api-key header")
+		}
 		if r.Header.Get("USER_ID") != "user-a" {
 			t.Fatalf("missing user id header")
+		}
+		if r.Header.Get("X-User-Id") != "user-a" {
+			t.Fatalf("missing x-user-id header")
 		}
 		_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","status":"online"}]}`))
 	}))

@@ -113,6 +113,8 @@ CLI 配置读取顺序：
 说明：
 
 - `FLEET_BASE_URL` 和 `FLEET_API_KEY` 是 CLI 使用的变量名
+- CLI 发送 runtime 请求时会同时带 `API_KEY` / `USER_ID` 和 `X-API-Key` / `X-User-Id`
+- 如果前面挂了 Nginx / OpenResty 之类的反向代理，优先确保代理允许并透传自定义请求头；带下划线的 header 可能被直接丢弃
 
 最小配置：
 
@@ -299,6 +301,7 @@ Web 页面鉴权只有两种状态：
 
 - `API_KEY: <FLEETD_API_KEY>`
 - `USER_ID: <目标用户>`
+- 或等价的 `X-API-Key` / `X-User-Id`
 
 ## 7. CLI 示例
 

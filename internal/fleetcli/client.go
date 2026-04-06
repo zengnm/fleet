@@ -541,9 +541,11 @@ func (c *Client) doJSON(ctx context.Context, method, path string, requestBody an
 	}
 	if c.apiKey != "" {
 		req.Header.Set("API_KEY", c.apiKey)
+		req.Header.Set("X-API-Key", c.apiKey)
 	}
 	if c.userID != "" {
 		req.Header.Set("USER_ID", c.userID)
+		req.Header.Set("X-User-Id", c.userID)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
