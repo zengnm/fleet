@@ -170,6 +170,47 @@ curl http://127.0.0.1:8090/healthz
 
 ### 5.2 让节点接入 `fleetd`
 
+推荐使用本仓库自带的节点端 CLI `fleetn`：
+
+```bash
+go run ./cmd/fleetn register \
+  --server http://127.0.0.1:8090 \
+  --token replace-with-a-node-bootstrap-token \
+  --name "Build Node"
+```
+
+`fleetn register` 默认前台运行，连接成功后会输出完整 `device_id` 和认领页面地址。注册后设备会进入 `/fleet/claims`，仍需要管理员完成认领。
+
+安装成用户级后台服务：
+
+```bash
+fleetn register \
+  --server http://127.0.0.1:8090 \
+  --token replace-with-a-node-bootstrap-token \
+  --name "Build Node" \
+  --install
+```
+
+`fleetn` 默认文件：
+
+```text
+~/.fleetn/config.json
+~/.fleetn/identity.json
+```
+
+也可以用环境变量作为参数兜底：
+
+```bash
+export FLEETN_SERVER_URL=http://127.0.0.1:8090
+export FLEETN_GATEWAY_TOKEN=replace-with-a-node-bootstrap-token
+export FLEETN_DISPLAY_NAME="Build Node"
+go run ./cmd/fleetn register
+```
+
+`fleetn` v1 提供 headless shell 节点能力：`system.which`、`system.run.prepare`、`system.run`。
+
+如果要继续使用 OpenClaw 节点，也仍然兼容：
+
 前台运行节点：
 
 ```bash
@@ -219,6 +260,12 @@ http://127.0.0.1:8090/fleet/claims
 
 ```text
 ~/.openclaw/identity/device.json
+```
+
+对于 `fleetn register/run` 接入的节点，可查看：
+
+```text
+~/.fleetn/identity.json
 ```
 
 如果你配置的是 `fleetd` 作为 gateway backend 的 operator 身份文件，那是另一套身份文件，默认位置仍是：

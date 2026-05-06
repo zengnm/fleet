@@ -61,7 +61,7 @@
     {{if eq .Page "claims"}}
     <section class="hero">
       <h1>待认领设备</h1>
-      <p>设备先用 <code>openclaw node run</code> 或 <code>openclaw node install</code> 连接到 Fleet 节点端点，接入后会先出现在这里。页面只展示设备 ID 前半部分辅助核对；认领时需输入完整设备 ID，完整值可在节点本机的 <code>~/.openclaw/identity/device.json</code> 查看。</p>
+      <p>设备先用 <code>fleetn register</code> 或 <code>openclaw node run/install</code> 连接到 Fleet 节点端点，接入后会先出现在这里。页面只展示设备 ID 前半部分辅助核对；认领时需输入完整设备 ID，完整值可从 <code>fleetn register</code> 输出、<code>~/.fleetn/identity.json</code> 或 <code>~/.openclaw/identity/device.json</code> 查看。</p>
     </section>
     <section class="panel">
       <table>
@@ -79,7 +79,7 @@
             <td class="row-actions">
               <form method="post" action="/fleet/claims/{{.PairingID}}/approve" class="inline">
                 <input name="device_id_suffix" placeholder="输入完整设备 ID" autocomplete="off" spellcheck="false">
-                <span class="hint">设备 ID 不区分大小写，可从 <code>~/.openclaw/identity/device.json</code> 复制。</span>
+                <span class="hint">设备 ID 不区分大小写，可从 <code>fleetn register</code> 输出或 identity 文件复制。</span>
                 <button type="submit">认领</button>
               </form>
               <form method="post" action="/fleet/claims/{{.PairingID}}/reject"><button class="ghost" type="submit">拒绝</button></form>

@@ -20,8 +20,10 @@ openclaw node ---> fleetd ---> fleet CLI / fleet Web
 
 - `cmd/fleetd`: 服务端入口
 - `cmd/fleet`: 用户侧 CLI
+- `cmd/fleetn`: 节点端一键接入 CLI
 - `internal/fleetd`: WebSocket 接入、配对、页面、runtime API、认证
 - `internal/fleet`: Fleet 服务层
+- `internal/fleetnode`: 节点端 agent、identity、远程命令执行与用户级服务安装
 - `internal/store`: SQLite 存储
 - `pkg/spec`: 对外请求/响应结构
 - `docs/fleet.md`: 详细部署和使用文档
@@ -41,6 +43,17 @@ go run ./cmd/fleetd
 export OPENCLAW_GATEWAY_TOKEN='change-me'
 openclaw --dev node run --host 127.0.0.1 --port 8090 --display-name "Build Node"
 ```
+
+也可以使用本仓库自带的节点端 CLI，不依赖 `openclaw node`：
+
+```bash
+go run ./cmd/fleetn register \
+  --server http://127.0.0.1:8090 \
+  --token change-me \
+  --name "Build Node"
+```
+
+默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。
 
 认领后列节点：
 
@@ -67,5 +80,4 @@ go test ./...
 
 ## 代办
 
-- 当前只实现了headless类型的节点，其它类型待实现
-- 不用依赖openclaw node，实现自己的cli注册节点
+- 当前只实现了 headless / shell 类型节点，其它类型待实现
