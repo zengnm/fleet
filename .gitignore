@@ -8,3 +8,4 @@ bin/
 fleet
 fleetd
 fleetn
+.gocache

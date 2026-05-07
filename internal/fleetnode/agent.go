@@ -430,11 +430,12 @@ func systemRunPrepare(params map[string]any) (map[string]any, error) {
 		rawCommand = shellQuote(argv)
 	}
 	cwd, _ := params["cwd"].(string)
+	cwd = runWorkingDirectory(cwd)
 	return map[string]any{
 		"cmdText": rawCommand,
 		"plan": map[string]any{
 			"argv":        argv,
-			"cwd":         strings.TrimSpace(cwd),
+			"cwd":         cwd,
 			"commandText": rawCommand,
 			"rawCommand":  rawCommand,
 			"agentId":     "fleetn",
@@ -454,7 +455,7 @@ func systemRun(ctx context.Context, cfg Config, params map[string]any, timeout t
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
-	if cwd, _ := params["cwd"].(string); strings.TrimSpace(cwd) != "" {
+	if cwd := runWorkingDirectory(stringFromAny(params["cwd"])); cwd != "" {
 		cmd.Dir = cwd
 	}
 	if env := stringMap(params["env"]); len(env) > 0 {
@@ -488,6 +489,22 @@ func systemRun(ctx context.Context, cfg Config, params map[string]any, timeout t
 		"success":  success,
 		"timedOut": timedOut,
 	}, nil
+}
+
+func runWorkingDirectory(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		return requested
+	}
+	if executable, err := os.Executable(); err == nil {
+		if dir := strings.TrimSpace(filepath.Dir(executable)); dir != "" {
+			return dir
+		}
+	}
+	if dir, err := os.Getwd(); err == nil {
+		return strings.TrimSpace(dir)
+	}
+	return ""
 }
 
 func websocketURL(serverURL string) (string, error) {
@@ -556,6 +573,11 @@ func stringMap(value any) map[string]string {
 		}
 	}
 	return result
+}
+
+func stringFromAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func shellQuote(argv []string) string {

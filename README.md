@@ -53,7 +53,7 @@ go run ./cmd/fleetn register \
   --name "Build Node"
 ```
 
-如果服务端没有配置 `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`，可以不传 `--token`。默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。
+如果服务端没有配置 `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`，可以不传 `--token`。默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。`fleetn --install` 使用本机用户级服务机制：macOS 是 LaunchAgent，Linux 是 systemd user service，Windows 是当前用户 Scheduled Task。
 
 `fleetn` 的 `system.run` 默认需要节点本机 exec approvals 放行。认领后可通过 Fleet CLI 配置：
 
@@ -78,7 +78,7 @@ go run ./cmd/fleet list
 
 - 默认示例里没有配置 `FLEETD_JWT_RS256_PUBLIC_KEY`，页面认领产生的用户是 `anonymous`
 - `openclaw node run --host/--port` 直接连接 `fleetd` 根路径
-- `fleetn` 支持 `status`、`stop`、`restart`、`uninstall` 管理用户级后台服务
+- `fleetn` 支持 `status`、`stop`、`restart`、`uninstall` 管理用户级后台服务；`status` 返回简洁状态值，如 `running` 或 `stopped`
 - 更完整的配置、鉴权、API、反向代理和故障排查见 [docs/fleet.md](/Users/zengnianmei/workspace/source/fleetd/docs/fleet.md)
 
 ## 开发

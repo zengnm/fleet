@@ -193,6 +193,12 @@ fleetn register \
   --install
 ```
 
+`--install` 会按当前平台写入并启动用户级后台服务：
+
+- macOS: LaunchAgent
+- Linux: systemd user service
+- Windows: 当前用户 Scheduled Task
+
 `fleetn` 默认文件：
 
 ```text
@@ -220,6 +226,8 @@ fleetn stop
 fleetn restart
 fleetn uninstall
 ```
+
+`fleetn status` 返回简洁状态值，例如 `running`、`stopped`，便于脚本和人工检查。
 
 如果要继续使用 OpenClaw 节点，也仍然兼容：
 

@@ -208,6 +208,24 @@ func TestSystemCommands(t *testing.T) {
 		t.Fatalf("unexpected run payload: %+v", run)
 	}
 
+	defaultRun, err := systemRun(context.Background(), cfg, map[string]any{
+		"command": []any{"sh", "-c", "pwd"},
+	}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("systemRun default cwd: %v", err)
+	}
+	expectedDefaultDir, err := filepath.EvalSymlinks(runWorkingDirectory(""))
+	if err != nil {
+		expectedDefaultDir = runWorkingDirectory("")
+	}
+	actualDefaultDir := strings.TrimSpace(defaultRun["stdout"].(string))
+	if resolved, err := filepath.EvalSymlinks(actualDefaultDir); err == nil {
+		actualDefaultDir = resolved
+	}
+	if actualDefaultDir != expectedDefaultDir {
+		t.Fatalf("default cwd = %q, want %q", defaultRun["stdout"], expectedDefaultDir)
+	}
+
 	failed, err := systemRun(context.Background(), cfg, map[string]any{"command": []any{"sh", "-c", "exit 7"}}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("systemRun nonzero: %v", err)
@@ -271,10 +289,16 @@ func TestServiceRenderers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLaunchAgent: %v", err)
 	}
+	if strings.HasPrefix(plist, "&lt;") || !strings.HasPrefix(plist, "<?xml") {
+		t.Fatalf("launch agent plist is not raw XML:\n%s", plist)
+	}
 	for _, expected := range []string{"com.fleetn.agent", "<string>run</string>", "<string>--config</string>"} {
 		if !strings.Contains(plist, expected) {
 			t.Fatalf("plist missing %q:\n%s", expected, plist)
 		}
+	}
+	if !strings.Contains(plist, "<key>WorkingDirectory</key>") {
+		t.Fatalf("plist missing working directory:\n%s", plist)
 	}
 	unit, err := RenderSystemdUserUnit("/usr/local/bin/fleetn", "/home/me/.fleetn/config.json")
 	if err != nil {
@@ -282,6 +306,40 @@ func TestServiceRenderers(t *testing.T) {
 	}
 	if !strings.Contains(unit, "ExecStart=/usr/local/bin/fleetn run --config /home/me/.fleetn/config.json") {
 		t.Fatalf("unexpected unit:\n%s", unit)
+	}
+	if !strings.Contains(unit, "WorkingDirectory=/usr/local/bin") {
+		t.Fatalf("systemd unit missing working directory:\n%s", unit)
+	}
+	windowsCommand, err := RenderWindowsScheduledTaskCommand(`C:\Program Files\fleetn\fleetn.exe`, `C:\Users\me\.fleetn\config.json`)
+	if err != nil {
+		t.Fatalf("RenderWindowsScheduledTaskCommand: %v", err)
+	}
+	expectedWindows := `"C:\Program Files\fleetn\fleetn.exe" run --config "C:\Users\me\.fleetn\config.json"`
+	if windowsCommand != expectedWindows {
+		t.Fatalf("windows command = %q, want %q", windowsCommand, expectedWindows)
+	}
+}
+
+func TestServiceStatusParsing(t *testing.T) {
+	t.Parallel()
+
+	if got := parseLaunchdStatus("state = running\n"); got != "running" {
+		t.Fatalf("parseLaunchdStatus running = %q", got)
+	}
+	if got := parseLaunchdStatus("state = waiting\n"); got != "stopped" {
+		t.Fatalf("parseLaunchdStatus waiting = %q", got)
+	}
+	if got := normalizeSystemdStatus("active"); got != "running" {
+		t.Fatalf("normalizeSystemdStatus active = %q", got)
+	}
+	if got := normalizeSystemdStatus("inactive"); got != "stopped" {
+		t.Fatalf("normalizeSystemdStatus inactive = %q", got)
+	}
+	if got := parseWindowsTaskStatus("Status: Running\n"); got != "running" {
+		t.Fatalf("parseWindowsTaskStatus running = %q", got)
+	}
+	if got := parseWindowsTaskStatus("Status: Ready\n"); got != "stopped" {
+		t.Fatalf("parseWindowsTaskStatus ready = %q", got)
 	}
 }
 
