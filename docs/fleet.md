@@ -181,6 +181,8 @@ go run ./cmd/fleetn register \
 
 `fleetn register` 默认前台运行，连接成功后会输出完整 `device_id` 和认领页面地址。注册后设备会进入 `/fleet/claims`，仍需要管理员完成认领。
 
+如果服务端没有配置 `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`，`fleetn register` 可以不传 `--token` 或 `--password`；如果服务端配置了 bootstrap 凭证，节点首次接入必须传对应值。
+
 安装成用户级后台服务：
 
 ```bash
@@ -196,6 +198,7 @@ fleetn register \
 ```text
 ~/.fleetn/config.json
 ~/.fleetn/identity.json
+~/.fleetn/exec-approvals.json
 ```
 
 也可以用环境变量作为参数兜底：
@@ -207,7 +210,16 @@ export FLEETN_DISPLAY_NAME="Build Node"
 go run ./cmd/fleetn register
 ```
 
-`fleetn` v1 提供 headless shell 节点能力：`system.which`、`system.run.prepare`、`system.run`。
+`fleetn` 提供 headless shell 节点能力：`system.which`、`system.run.prepare`、`system.run`、`system.execApprovals.get/set`。浏览器能力默认由 `fleetn` 内置的 Chrome/CDP 代理提供；如果设置了 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`，则改为把 `browser.proxy` 请求转发到该本机浏览器代理 HTTP 服务。
+
+用户级后台服务管理：
+
+```bash
+fleetn status
+fleetn stop
+fleetn restart
+fleetn uninstall
+```
 
 如果要继续使用 OpenClaw 节点，也仍然兼容：
 
@@ -398,6 +410,12 @@ go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.get --
 go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'
 ```
 
+放行目标可执行文件：
+
+```bash
+go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.set --params '{"patterns":["/usr/bin/uname"]}'
+```
+
 执行一次 `system.run`：
 
 ```bash
@@ -413,12 +431,13 @@ go run ./cmd/fleet invoke --node <node-id> --command system.which --params '{"na
 说明：
 
 - `system.execApprovals.get` 很适合用来确认节点侧 approvals 当前状态
+- `fleetn` 默认拒绝未放行的 `system.run`，可用 `system.execApprovals.set` 写入本机 `~/.fleetn/exec-approvals.json`
 - `system.run.prepare` 能验证 `invoke` 链路没问题，还能看到节点规范化后的可执行路径
 - `system.which` 必须带 `bins`；不同机器上结果可能为空，这取决于节点主机是否真的有这些路径
 
 浏览器能力示例：
 
-这组写法没有在本文环境做端到端实机验证，但我已按 `2026-04-06` 时的 OpenClaw 官方文档和 `openclaw` npm 包 `2026.4.2` 运行时代码核对过当前调用形态。
+这组写法覆盖 `fleetn` 内置 Chrome/CDP 代理和兼容 OpenClaw 浏览器控制路由的常见调用形态。
 
 先确认节点是否真的暴露了浏览器代理命令：
 
@@ -431,7 +450,34 @@ go run ./cmd/fleet describe --node <node-id>
 - `Caps` 里有 `browser`
 - `Commands` 里有 `browser.proxy`
 
-如果节点没有这项能力，先检查节点主机上的 OpenClaw 浏览器插件是否启用；当你配置了 `plugins.allow` 时，还必须显式包含 `browser`。
+如果 `fleetn` 节点没有这项能力，先确认节点主机能找到 Chrome/Chromium，或设置了 `FLEETN_BROWSER_EXECUTABLE_PATH` / `FLEETN_BROWSER_PROXY_URL`。如果是 OpenClaw 节点，检查节点主机上的 OpenClaw 浏览器插件是否启用；当你配置了 `plugins.allow` 时，还必须显式包含 `browser`。
+
+对于 `fleetn` 节点，默认不需要额外配置 `--browser-proxy`，也不依赖节点主机安装 `openclaw`：只要节点主机上有 Chrome/Chromium，`fleetn` 会自己启动/复用一个 headless Chrome，并通过 CDP 执行 `browser.proxy`。
+
+如果要覆盖为外部 HTTP 浏览器代理，仍然可以在节点端显式配置：
+
+```bash
+export FLEETN_BROWSER_PROXY_URL=http://127.0.0.1:9222
+fleetn register --server http://127.0.0.1:8090 --name "Build Node"
+```
+
+如果 Chrome/Chromium 不在常见路径里，可以用 `FLEETN_BROWSER_EXECUTABLE_PATH` 或 `--browser-executable` 指向浏览器可执行文件。显式 HTTP 代理优先级高于内置 CDP 代理。
+
+内置 CDP 代理默认用 headless Chrome。需要在节点主机的图形桌面里打开可见窗口时，可以写配置文件：
+
+```json
+{
+  "browserHeadless": false
+}
+```
+
+也可以注册时显式指定：
+
+```bash
+fleetn register --server http://127.0.0.1:8090 --name "Build Node" --browser-headless false
+```
+
+配置优先级是：内置默认值 < `~/.fleetn/config.json` < `FLEETN_*` 环境变量 < `fleetn register` 命令参数。`fleetn register` 会先读取已有配置，只覆盖本次显式指定的字段；未指定 `--browser-headless` 或 `FLEETN_BROWSER_HEADLESS` 时，不会把已有的 `"browserHeadless": false` 重置为默认值。
 
 先打开一个页面：
 
@@ -501,9 +547,9 @@ go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
 
 补充说明：
 
-- `browser.proxy` 的参数形态本质上是对 OpenClaw 浏览器控制路由的透传，核心字段是 `method`、`path`、`query`、`body`
+- `browser.proxy` 的参数形态兼容 OpenClaw 浏览器控制路由，核心字段是 `method`、`path`、`query`、`body`
 - 常见路径包括 `/tabs`、`/tabs/open`、`/navigate`、`/snapshot`、`/act`
-- `navigate`、`act`、AI snapshot 等能力通常依赖 Playwright；如果节点主机没装完整 Playwright，节点可能返回 `501`
+- `fleetn` 内置代理当前覆盖常见路由：`/tabs`、`/tabs/open`、`/navigate`、`/snapshot`、`/act`、`/screenshot`
 - 页面跳转后 `ref` 可能失效；这是浏览器 snapshot 的正常行为，需要重新抓一次 `/snapshot`
 
 远程执行形态：
@@ -529,8 +575,8 @@ go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"comm
 注意：
 
 - `invoke` 能否成功，取决于节点实际暴露的 `commands` 和参数要求
-- `system.run` 在真实节点上会受节点主机本地 exec approvals 约束
-- 在当前 `fleetd` 独立模式下，最直接可行的处理方式是在节点主机本机执行 `openclaw approvals ...`
+- `system.run` 在真实节点和 `fleetn` 节点上都会受节点主机本地 exec approvals 约束
+- OpenClaw 节点可在节点主机本机执行 `openclaw approvals ...`；`fleetn` 节点可通过 `system.execApprovals.set` 写入 `~/.fleetn/exec-approvals.json`
 
 ## 8. Runtime HTTP API 示例
 

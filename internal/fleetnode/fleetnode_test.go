@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,10 +29,13 @@ func TestConfigEnvAndFiles(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	cfg := MergeConfig(ConfigFromEnv(func(key string) string {
 		values := map[string]string{
-			"FLEETN_SERVER_URL":       "http://127.0.0.1:8090",
-			"FLEETN_GATEWAY_TOKEN":    "token-a",
-			"FLEETN_DISPLAY_NAME":     "Env Node",
-			"FLEETN_GATEWAY_PASSWORD": "",
+			"FLEETN_SERVER_URL":              "http://127.0.0.1:8090",
+			"FLEETN_GATEWAY_TOKEN":           "token-a",
+			"FLEETN_DISPLAY_NAME":            "Env Node",
+			"FLEETN_GATEWAY_PASSWORD":        "",
+			"FLEETN_BROWSER_PROXY_URL":       "http://127.0.0.1:9222",
+			"FLEETN_BROWSER_EXECUTABLE_PATH": filepath.Join(dir, "chrome"),
+			"FLEETN_BROWSER_HEADLESS":        "false",
 		}
 		return values[key]
 	}), Config{DisplayName: "Flag Node", IdentityPath: filepath.Join(dir, "identity.json")})
@@ -49,8 +53,76 @@ func TestConfigEnvAndFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigFile: %v", err)
 	}
-	if loaded.ServerURL != "http://127.0.0.1:8090" || loaded.GatewayToken != "token-a" || loaded.DisplayName != "Flag Node" {
+	if loaded.ServerURL != "http://127.0.0.1:8090" || loaded.GatewayToken != "token-a" || loaded.DisplayName != "Flag Node" || loaded.BrowserProxyURL != "http://127.0.0.1:9222" || loaded.BrowserExecutablePath != filepath.Join(dir, "chrome") || loaded.BrowserHeadless {
 		t.Fatalf("unexpected loaded config: %+v", loaded)
+	}
+}
+
+func TestConfigDefaultsBrowserHeadless(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := normalizeConfig(Config{ServerURL: "http://127.0.0.1:8090", DisplayName: "Node"})
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	if !cfg.BrowserHeadless || !cfg.BrowserHeadlessSet {
+		t.Fatalf("expected browser headless default true: %+v", cfg)
+	}
+}
+
+func TestRegisterConfigPreservesExistingBrowserHeadless(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	existing := Config{
+		ServerURL:             "http://127.0.0.1:8090",
+		GatewayToken:          "token-a",
+		DisplayName:           "Old Node",
+		IdentityPath:          filepath.Join(dir, "identity.json"),
+		ApprovalsPath:         filepath.Join(dir, "approvals.json"),
+		BrowserProxyURL:       "http://127.0.0.1:9222",
+		BrowserExecutablePath: filepath.Join(dir, "chrome"),
+		BrowserHeadless:       false,
+		BrowserHeadlessSet:    true,
+	}
+	if err := SaveConfigFile(path, existing); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+
+	cfg, err := registerConfig(registerOptions{
+		configPath:  path,
+		serverURL:   "http://127.0.0.1:8091",
+		token:       "token-b",
+		displayName: "Build Node",
+	}, Config{})
+	if err != nil {
+		t.Fatalf("registerConfig: %v", err)
+	}
+	if cfg.BrowserHeadless {
+		t.Fatalf("registerConfig reset browser headless: %+v", cfg)
+	}
+	if cfg.ServerURL != "http://127.0.0.1:8091" || cfg.GatewayToken != "token-b" || cfg.DisplayName != "Build Node" {
+		t.Fatalf("registerConfig did not apply CLI fields: %+v", cfg)
+	}
+	if cfg.IdentityPath != existing.IdentityPath || cfg.ApprovalsPath != existing.ApprovalsPath || cfg.BrowserProxyURL != existing.BrowserProxyURL || cfg.BrowserExecutablePath != existing.BrowserExecutablePath {
+		t.Fatalf("registerConfig did not preserve existing fields: %+v", cfg)
+	}
+
+	envOverride, err := registerConfig(registerOptions{configPath: path}, Config{BrowserHeadless: true, BrowserHeadlessSet: true})
+	if err != nil {
+		t.Fatalf("registerConfig env override: %v", err)
+	}
+	if !envOverride.BrowserHeadless {
+		t.Fatalf("expected env to override browser headless: %+v", envOverride)
+	}
+
+	cliOverride, err := registerConfig(registerOptions{configPath: path, browserHeadless: "false"}, Config{BrowserHeadless: true, BrowserHeadlessSet: true})
+	if err != nil {
+		t.Fatalf("registerConfig CLI override: %v", err)
+	}
+	if cliOverride.BrowserHeadless {
+		t.Fatalf("expected CLI to override browser headless: %+v", cliOverride)
 	}
 }
 
@@ -110,7 +182,17 @@ func TestSystemCommands(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	run, err := systemRun(context.Background(), map[string]any{
+	cfg := Config{ApprovalsPath: filepath.Join(dir, "approvals.json")}
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("LookPath sh: %v", err)
+	}
+	if err := writeApprovalsFile(cfg.ApprovalsPath, approvalsFile{Agents: map[string]approvalAgent{
+		defaultApprovalAgent: {Allowlist: []approvalEntry{{Pattern: shPath}}},
+	}}); err != nil {
+		t.Fatalf("writeApprovalsFile: %v", err)
+	}
+	run, err := systemRun(context.Background(), cfg, map[string]any{
 		"command": []any{"sh", "-c", "printf '%s:%s' \"$FLEETN_TEST\" \"$PWD\""},
 		"cwd":     dir,
 		"env":     map[string]any{"FLEETN_TEST": "ok"},
@@ -126,7 +208,7 @@ func TestSystemCommands(t *testing.T) {
 		t.Fatalf("unexpected run payload: %+v", run)
 	}
 
-	failed, err := systemRun(context.Background(), map[string]any{"command": []any{"sh", "-c", "exit 7"}}, 5*time.Second)
+	failed, err := systemRun(context.Background(), cfg, map[string]any{"command": []any{"sh", "-c", "exit 7"}}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("systemRun nonzero: %v", err)
 	}
@@ -134,12 +216,51 @@ func TestSystemCommands(t *testing.T) {
 		t.Fatalf("unexpected failed payload: %+v", failed)
 	}
 
-	timedOut, err := systemRun(context.Background(), map[string]any{"command": []any{"sh", "-c", "sleep 1"}}, 10*time.Millisecond)
+	timedOut, err := systemRun(context.Background(), cfg, map[string]any{"command": []any{"sh", "-c", "sleep 1"}}, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("systemRun timeout: %v", err)
 	}
 	if timedOut["timedOut"] != true || timedOut["success"] != false {
 		t.Fatalf("unexpected timeout payload: %+v", timedOut)
+	}
+
+	_, err = systemRun(context.Background(), Config{ApprovalsPath: filepath.Join(dir, "missing.json")}, map[string]any{"command": []any{"sh", "-c", "true"}}, 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "approval required") {
+		t.Fatalf("expected approval required error, got %v", err)
+	}
+}
+
+func TestExecApprovalsGetSet(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{ApprovalsPath: filepath.Join(t.TempDir(), "exec-approvals.json")}
+	initial, err := execApprovalsGet(cfg)
+	if err != nil {
+		t.Fatalf("execApprovalsGet: %v", err)
+	}
+	if initial["exists"] != false {
+		t.Fatalf("expected missing approvals file: %+v", initial)
+	}
+	updated, err := execApprovalsSet(cfg, map[string]any{"patterns": []any{"/bin/sh", "/usr/bin/env"}})
+	if err != nil {
+		t.Fatalf("execApprovalsSet: %v", err)
+	}
+	if updated["exists"] != true || strings.TrimSpace(updated["hash"].(string)) == "" {
+		t.Fatalf("unexpected updated approvals: %+v", updated)
+	}
+	file := updated["file"].(map[string]any)
+	agents := file["agents"].(map[string]any)
+	if _, ok := agents[defaultApprovalAgent]; !ok {
+		t.Fatalf("missing default agent in approvals: %+v", updated)
+	}
+}
+
+func TestCommandTimeoutUsesParamsTimeout(t *testing.T) {
+	t.Parallel()
+
+	got := commandTimeout(2*time.Second, 1000, map[string]any{"timeoutMs": float64(20000)})
+	if got != 20*time.Second {
+		t.Fatalf("timeout = %s, want 20s", got)
 	}
 }
 
@@ -161,6 +282,82 @@ func TestServiceRenderers(t *testing.T) {
 	}
 	if !strings.Contains(unit, "ExecStart=/usr/local/bin/fleetn run --config /home/me/.fleetn/config.json") {
 		t.Fatalf("unexpected unit:\n%s", unit)
+	}
+}
+
+func TestBrowserProxyForwardsRequests(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if r.URL.Path != "/tabs/open" || r.URL.Query().Get("targetId") != "tab-1" {
+			t.Fatalf("unexpected URL: %s", r.URL.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["url"] != "https://example.com" {
+			t.Fatalf("unexpected body: %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"targetId":"tab-1"}`))
+	}))
+	defer server.Close()
+
+	payload, err := browserProxy(context.Background(), Config{BrowserProxyURL: server.URL}, map[string]any{
+		"method": "POST",
+		"path":   "/tabs/open",
+		"query":  map[string]any{"targetId": "tab-1"},
+		"body":   map[string]any{"url": "https://example.com"},
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("browserProxy: %v", err)
+	}
+	object := payload.(map[string]any)
+	result := object["result"].(map[string]any)
+	if result["ok"] != true || result["targetId"] != "tab-1" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestResolveBrowserExecutablePath(t *testing.T) {
+	t.Parallel()
+
+	executablePath := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(executablePath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write executable: %v", err)
+	}
+	resolved, err := resolveBrowserExecutablePath(Config{BrowserExecutablePath: executablePath})
+	if err != nil {
+		t.Fatalf("resolveBrowserExecutablePath: %v", err)
+	}
+	if resolved != executablePath {
+		t.Fatalf("resolved = %q, want %q", resolved, executablePath)
+	}
+}
+
+func TestBuildConnectParamsAdvertisesNativeBrowser(t *testing.T) {
+	t.Parallel()
+
+	executablePath := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(executablePath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write executable: %v", err)
+	}
+	identity, err := LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity.json"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	params, err := buildConnectParams(Config{
+		DisplayName:           "Browser Node",
+		BrowserExecutablePath: executablePath,
+	}, identity, "nonce")
+	if err != nil {
+		t.Fatalf("buildConnectParams: %v", err)
+	}
+	if !containsString(params.Caps, "browser") || !containsString(params.Commands, "browser.proxy") {
+		t.Fatalf("browser proxy not advertised: caps=%v commands=%v", params.Caps, params.Commands)
 	}
 }
 
@@ -191,6 +388,7 @@ func TestFleetnEndToEndWithFleetd(t *testing.T) {
 		GatewayToken:   "node-bootstrap-token",
 		DisplayName:    "fleetn test node",
 		IdentityPath:   filepath.Join(dir, "identity.json"),
+		ApprovalsPath:  filepath.Join(dir, "exec-approvals.json"),
 		ReconnectDelay: 20 * time.Millisecond,
 		CommandTimeout: 2 * time.Second,
 	}
@@ -238,6 +436,13 @@ func TestFleetnEndToEndWithFleetd(t *testing.T) {
 	})
 	if !invoke.OK {
 		t.Fatalf("system.which failed: %+v", invoke)
+	}
+	setApprovals := runtimeInvokeNode(t, httpServer.URL, "runtime-key", "anonymous", nodeID, map[string]any{
+		"command": "system.execApprovals.set",
+		"params":  map[string]any{"patterns": []string{"sh"}},
+	})
+	if !setApprovals.OK {
+		t.Fatalf("system.execApprovals.set failed: %+v", setApprovals)
 	}
 	run := runtimeRunNode(t, httpServer.URL, "runtime-key", "anonymous", nodeID, map[string]any{
 		"command": []string{"sh", "-c", "printf fleetn"},
@@ -383,3 +588,12 @@ func TestRunCLIHelp(t *testing.T) {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}

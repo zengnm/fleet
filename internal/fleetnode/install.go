@@ -106,7 +106,7 @@ func installLaunchAgent(ctx context.Context, home, executablePath, configPath st
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(home, "Library", "LaunchAgents", "com.fleetn.agent.plist")
+	path := launchAgentPath(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func installSystemdUser(ctx context.Context, home, executablePath, configPath st
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(home, ".config", "systemd", "user", "fleetn.service")
+	path := systemdUserUnitPath(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -141,6 +141,104 @@ func installSystemdUser(ctx context.Context, home, executablePath, configPath st
 		return fmt.Errorf("systemd unit written to %s, but enable/start failed: %w; run: systemctl --user enable --now fleetn.service", path, err)
 	}
 	return nil
+}
+
+func UserServiceStatus(ctx context.Context, options InstallOptions) (string, error) {
+	home, err := installHome(options.HomeDir)
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.CommandContext(ctx, "launchctl", "list", "com.fleetn.agent")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "stopped", nil
+		}
+		return strings.TrimSpace(string(output)), nil
+	case "linux":
+		cmd := exec.CommandContext(ctx, "systemctl", "--user", "is-active", "fleetn.service")
+		output, err := cmd.CombinedOutput()
+		status := strings.TrimSpace(string(output))
+		if status == "" && err != nil {
+			status = "inactive"
+		}
+		return status, nil
+	default:
+		_ = home
+		return "", fmt.Errorf("user service status is not supported on %s", runtime.GOOS)
+	}
+}
+
+func StopUserService(ctx context.Context, options InstallOptions) error {
+	home, err := installHome(options.HomeDir)
+	if err != nil {
+		return err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		path := launchAgentPath(home)
+		if err := exec.CommandContext(ctx, "launchctl", "unload", path).Run(); err != nil {
+			return fmt.Errorf("launchctl unload failed: %w; run: launchctl unload %s", err, path)
+		}
+		return nil
+	case "linux":
+		if err := exec.CommandContext(ctx, "systemctl", "--user", "stop", "fleetn.service").Run(); err != nil {
+			return fmt.Errorf("systemctl stop failed: %w; run: systemctl --user stop fleetn.service", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("user service stop is not supported on %s", runtime.GOOS)
+	}
+}
+
+func RestartUserService(ctx context.Context, options InstallOptions) error {
+	home, err := installHome(options.HomeDir)
+	if err != nil {
+		return err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		path := launchAgentPath(home)
+		_ = exec.CommandContext(ctx, "launchctl", "unload", path).Run()
+		if err := exec.CommandContext(ctx, "launchctl", "load", path).Run(); err != nil {
+			return fmt.Errorf("launchctl load failed: %w; run: launchctl load %s", err, path)
+		}
+		return nil
+	case "linux":
+		if err := exec.CommandContext(ctx, "systemctl", "--user", "restart", "fleetn.service").Run(); err != nil {
+			return fmt.Errorf("systemctl restart failed: %w; run: systemctl --user restart fleetn.service", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("user service restart is not supported on %s", runtime.GOOS)
+	}
+}
+
+func UninstallUserService(ctx context.Context, options InstallOptions) error {
+	home, err := installHome(options.HomeDir)
+	if err != nil {
+		return err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		path := launchAgentPath(home)
+		_ = exec.CommandContext(ctx, "launchctl", "unload", path).Run()
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	case "linux":
+		_ = exec.CommandContext(ctx, "systemctl", "--user", "disable", "--now", "fleetn.service").Run()
+		path := systemdUserUnitPath(home)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		_ = exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload").Run()
+		return nil
+	default:
+		return fmt.Errorf("user service uninstall is not supported on %s", runtime.GOOS)
+	}
 }
 
 func renderTemplate(text, executablePath, configPath string) (string, error) {
@@ -168,4 +266,20 @@ func systemdQuote(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func installHome(home string) (string, error) {
+	home = strings.TrimSpace(home)
+	if home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
+}
+
+func launchAgentPath(home string) string {
+	return filepath.Join(home, "Library", "LaunchAgents", "com.fleetn.agent.plist")
+}
+
+func systemdUserUnitPath(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user", "fleetn.service")
 }

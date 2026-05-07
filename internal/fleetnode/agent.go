@@ -218,11 +218,16 @@ func buildConnectParams(cfg Config, identity *Identity, nonce string) (connectPa
 		MinProtocol: protocolVersion,
 		MaxProtocol: protocolVersion,
 		Caps:        []string{"system"},
-		Commands:    []string{"system.which", "system.run.prepare", "system.run"},
+		Commands:    []string{"system.which", "system.run.prepare", "system.run", "system.execApprovals.get", "system.execApprovals.set"},
 		Permissions: map[string]bool{"exec": true},
 		PathEnv:     os.Getenv("PATH"),
 		Role:        "node",
 		Scopes:      []string{},
+	}
+	if browserProxyAvailable(cfg) {
+		params.Caps = append(params.Caps, "browser")
+		params.Commands = append(params.Commands, "browser.proxy")
+		params.Permissions["browser.enabled"] = true
 	}
 	params.Client.ID = "fleetn"
 	params.Client.DisplayName = cfg.DisplayName
@@ -324,12 +329,13 @@ func handleInvoke(ctx context.Context, cfg Config, nodeID string, request nodeIn
 	if err != nil {
 		return invokeFailure(request, nodeID, "COMMAND_FAILED", err.Error())
 	}
-	return nodeInvokeResult{
+	result := nodeInvokeResult{
 		ID:      request.ID,
 		NodeID:  nodeID,
 		OK:      true,
 		Payload: payload,
 	}
+	return result
 }
 
 func invokeFailure(request nodeInvokeRequestEvent, nodeID, code, message string) nodeInvokeResult {
@@ -355,10 +361,28 @@ func executeCommand(ctx context.Context, cfg Config, request nodeInvokeRequestEv
 		if request.TimeoutMs > 0 {
 			timeout = time.Duration(request.TimeoutMs) * time.Millisecond
 		}
-		return systemRun(ctx, params, timeout)
+		return systemRun(ctx, cfg, params, timeout)
+	case "system.execApprovals.get":
+		return execApprovalsGet(cfg)
+	case "system.execApprovals.set":
+		return execApprovalsSet(cfg, params)
+	case "browser.proxy":
+		timeout := commandTimeout(cfg.CommandTimeout, request.TimeoutMs, params)
+		return browserProxy(ctx, cfg, params, timeout)
 	default:
 		return nil, fmt.Errorf("unsupported command %q", request.Command)
 	}
+}
+
+func commandTimeout(defaultTimeout time.Duration, requestTimeoutMs int, params map[string]any) time.Duration {
+	timeout := defaultTimeout
+	if requestTimeoutMs > 0 {
+		timeout = time.Duration(requestTimeoutMs) * time.Millisecond
+	}
+	if paramsTimeout := durationFromAny(params["timeoutMs"]); paramsTimeout > timeout {
+		timeout = paramsTimeout
+	}
+	return timeout
 }
 
 func decodeParams(paramsJSON string) (map[string]any, error) {
@@ -419,10 +443,13 @@ func systemRunPrepare(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
-func systemRun(ctx context.Context, params map[string]any, timeout time.Duration) (map[string]any, error) {
+func systemRun(ctx context.Context, cfg Config, params map[string]any, timeout time.Duration) (map[string]any, error) {
 	argv := stringSlice(params["command"])
 	if len(argv) == 0 {
 		return nil, errors.New("command is required")
+	}
+	if err := requireRunApproval(cfg, argv); err != nil {
+		return nil, err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

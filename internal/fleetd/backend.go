@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -375,12 +376,13 @@ func (b *Backend) InvokeNode(ctx context.Context, nodeID, command string, params
 		}
 		paramsJSON = string(raw)
 	}
+	invokeTimeout := nodeInvokeTimeout(b.cfg.RequestTimeout, params)
 	if err := session.writeEvent("node.invoke.request", nodeInvokeRequestEvent{
 		ID:             requestID,
 		NodeID:         nodeID,
 		Command:        command,
 		ParamsJSON:     paramsJSON,
-		TimeoutMs:      int(b.cfg.RequestTimeout / time.Millisecond),
+		TimeoutMs:      int(invokeTimeout / time.Millisecond),
 		IdempotencyKey: randomRequestID(),
 	}); err != nil {
 		return spec.FleetInvokeResponse{}, err
@@ -409,6 +411,40 @@ func (b *Backend) InvokeNode(ctx context.Context, nodeID, command string, params
 		}
 		return response, nil
 	}
+}
+
+func nodeInvokeTimeout(defaultTimeout time.Duration, params map[string]any) time.Duration {
+	timeout := defaultTimeout
+	if paramsTimeout := durationFromAny(params["timeoutMs"]); paramsTimeout > timeout {
+		timeout = paramsTimeout
+	}
+	return timeout
+}
+
+func durationFromAny(value any) time.Duration {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return time.Duration(typed) * time.Millisecond
+		}
+	case int64:
+		if typed > 0 {
+			return time.Duration(typed) * time.Millisecond
+		}
+	case float64:
+		if typed > 0 && !math.IsNaN(typed) && !math.IsInf(typed, 0) {
+			return time.Duration(typed) * time.Millisecond
+		}
+	case json.Number:
+		if value, err := typed.Int64(); err == nil && value > 0 {
+			return time.Duration(value) * time.Millisecond
+		}
+	case string:
+		if value, err := time.ParseDuration(strings.TrimSpace(typed)); err == nil && value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (b *Backend) RunNode(ctx context.Context, nodeID string, request spec.FleetRunRequest) (spec.FleetRunResponse, error) {

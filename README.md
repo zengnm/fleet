@@ -53,7 +53,15 @@ go run ./cmd/fleetn register \
   --name "Build Node"
 ```
 
-默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。
+如果服务端没有配置 `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`，可以不传 `--token`。默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。
+
+`fleetn` 的 `system.run` 默认需要节点本机 exec approvals 放行。认领后可通过 Fleet CLI 配置：
+
+```bash
+go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.set --params '{"patterns":["/usr/bin/uname"]}'
+```
+
+`fleetn` 的 `browser.proxy` 默认使用内置 Chrome/CDP 代理，不依赖节点主机安装 OpenClaw；需要接外部浏览器代理时，可设置 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`。Chrome/Chromium 不在常见路径时，可设置 `FLEETN_BROWSER_EXECUTABLE_PATH` 或 `--browser-executable`。默认 headless；需可见窗口时，可在 `~/.fleetn/config.json` 设置 `"browserHeadless": false`，或注册时使用 `--browser-headless false` / `FLEETN_BROWSER_HEADLESS=false`。
 
 认领后列节点：
 
@@ -70,6 +78,7 @@ go run ./cmd/fleet list
 
 - 默认示例里没有配置 `FLEETD_JWT_RS256_PUBLIC_KEY`，页面认领产生的用户是 `anonymous`
 - `openclaw node run --host/--port` 直接连接 `fleetd` 根路径
+- `fleetn` 支持 `status`、`stop`、`restart`、`uninstall` 管理用户级后台服务
 - 更完整的配置、鉴权、API、反向代理和故障排查见 [docs/fleet.md](/Users/zengnianmei/workspace/source/fleetd/docs/fleet.md)
 
 ## 开发

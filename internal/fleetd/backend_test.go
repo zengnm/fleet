@@ -2,6 +2,7 @@ package fleetd
 
 import (
 	"testing"
+	"time"
 
 	"fleetd/pkg/spec"
 )
@@ -20,5 +21,14 @@ func TestDecodeInvokePlanAcceptsCurrentNodePayload(t *testing.T) {
 	}
 	if plan.CommandText != "/usr/bin/uname -a" {
 		t.Fatalf("unexpected command text: %q", plan.CommandText)
+	}
+}
+
+func TestNodeInvokeTimeoutUsesParamsTimeout(t *testing.T) {
+	t.Parallel()
+
+	got := nodeInvokeTimeout(2*time.Second, map[string]any{"timeoutMs": float64(20000)})
+	if got != 20*time.Second {
+		t.Fatalf("timeout = %s, want 20s", got)
 	}
 }
