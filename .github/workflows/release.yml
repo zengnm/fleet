@@ -94,12 +94,13 @@ jobs:
           packagedir="dist/packages"
           archive_base="fleetd_${version}_${GOOS}_${GOARCH}"
           binaries=(fleetd fleet fleetn)
+          build_flags=(-trimpath -buildvcs=false -gcflags=all=-l -ldflags="-s -w -buildid=")
           package_files=()
 
           mkdir -p "${outdir}" "${packagedir}"
 
           for binary in "${binaries[@]}"; do
-            go build -trimpath -ldflags "-s -w" -o "${outdir}/${binary}${BINARY_EXT}" "./cmd/${binary}"
+            go build "${build_flags[@]}" -o "${outdir}/${binary}${BINARY_EXT}" "./cmd/${binary}"
             package_files+=("${binary}${BINARY_EXT}")
           done
 
@@ -109,7 +110,7 @@ jobs:
               zip -9 -q "../../${packagedir}/${archive_base}.zip" "${package_files[@]}"
             )
           else
-            tar -C "${outdir}" -czf "${packagedir}/${archive_base}.tar.gz" "${package_files[@]}"
+            tar -C "${outdir}" -cf - "${package_files[@]}" | gzip -9 > "${packagedir}/${archive_base}.tar.gz"
           fi
 
       - name: Upload package artifact
