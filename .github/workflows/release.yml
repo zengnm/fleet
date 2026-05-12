@@ -12,6 +12,10 @@ env:
   CGO_ENABLED: "0"
   GOPROXY: https://proxy.golang.org,direct
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Test
@@ -19,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -42,15 +46,19 @@ jobs:
           - goos: linux
             goarch: amd64
             archive_ext: tar.gz
+            binary_ext: ""
           - goos: linux
             goarch: arm64
             archive_ext: tar.gz
+            binary_ext: ""
           - goos: darwin
             goarch: amd64
             archive_ext: tar.gz
+            binary_ext: ""
           - goos: darwin
             goarch: arm64
             archive_ext: tar.gz
+            binary_ext: ""
           - goos: windows
             goarch: amd64
             archive_ext: zip
@@ -62,10 +70,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -85,30 +93,27 @@ jobs:
           outdir="dist/${target}"
           packagedir="dist/packages"
           archive_base="fleetd_${version}_${GOOS}_${GOARCH}"
+          binaries=(fleetd fleet fleetn)
+          package_files=()
 
           mkdir -p "${outdir}" "${packagedir}"
 
-          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleetd${BINARY_EXT}" ./cmd/fleetd
-          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleet${BINARY_EXT}" ./cmd/fleet
-          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleetn${BINARY_EXT}" ./cmd/fleetn
+          for binary in "${binaries[@]}"; do
+            go build -trimpath -ldflags "-s -w" -o "${outdir}/${binary}${BINARY_EXT}" "./cmd/${binary}"
+            package_files+=("${binary}${BINARY_EXT}")
+          done
 
           if [ "${ARCHIVE_EXT}" = "zip" ]; then
             (
               cd "${outdir}"
-              zip -9 -q "../../${packagedir}/${archive_base}.zip" \
-                "fleetd${BINARY_EXT}" \
-                "fleet${BINARY_EXT}" \
-                "fleetn${BINARY_EXT}"
+              zip -9 -q "../../${packagedir}/${archive_base}.zip" "${package_files[@]}"
             )
           else
-            tar -C "${outdir}" -czf "${packagedir}/${archive_base}.tar.gz" \
-              "fleetd${BINARY_EXT}" \
-              "fleet${BINARY_EXT}" \
-              "fleetn${BINARY_EXT}"
+            tar -C "${outdir}" -czf "${packagedir}/${archive_base}.tar.gz" "${package_files[@]}"
           fi
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/packages/*
@@ -123,7 +128,7 @@ jobs:
 
     steps:
       - name: Download packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: package-*
           path: dist/packages
@@ -134,23 +139,12 @@ jobs:
         run: |
           set -euo pipefail
           cd dist/packages
-          sha256sum * > SHA256SUMS
+          sha256sum *.tar.gz *.zip > SHA256SUMS
 
       - name: Publish release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          tag="${GITHUB_REF_NAME}"
-          notes="Automated release for ${tag}."
-
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" dist/packages/* --clobber
-          else
-            gh release create "${tag}" dist/packages/* \
-              --title "${tag}" \
-              --notes "${notes}" \
-              --verify-tag
-          fi
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/packages/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
