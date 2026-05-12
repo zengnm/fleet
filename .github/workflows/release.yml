@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  GOPROXY: https://proxy.golang.org,direct
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            archive_ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            archive_ext: zip
+            binary_ext: .exe
+          - goos: windows
+            goarch: arm64
+            archive_ext: zip
+            binary_ext: .exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BINARY_EXT: ${{ matrix.binary_ext }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME}"
+          target="${GOOS}-${GOARCH}"
+          outdir="dist/${target}"
+          packagedir="dist/packages"
+          archive_base="fleetd_${version}_${GOOS}_${GOARCH}"
+
+          mkdir -p "${outdir}" "${packagedir}"
+
+          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleetd${BINARY_EXT}" ./cmd/fleetd
+          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleet${BINARY_EXT}" ./cmd/fleet
+          go build -trimpath -ldflags "-s -w" -o "${outdir}/fleetn${BINARY_EXT}" ./cmd/fleetn
+
+          if [ "${ARCHIVE_EXT}" = "zip" ]; then
+            (
+              cd "${outdir}"
+              zip -9 -q "../../${packagedir}/${archive_base}.zip" \
+                "fleetd${BINARY_EXT}" \
+                "fleet${BINARY_EXT}" \
+                "fleetn${BINARY_EXT}"
+            )
+          else
+            tar -C "${outdir}" -czf "${packagedir}/${archive_base}.tar.gz" \
+              "fleetd${BINARY_EXT}" \
+              "fleet${BINARY_EXT}" \
+              "fleetn${BINARY_EXT}"
+          fi
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/packages/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist/packages
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/packages
+          sha256sum * > SHA256SUMS
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          notes="Automated release for ${tag}."
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/packages/* --clobber
+          else
+            gh release create "${tag}" dist/packages/* \
+              --title "${tag}" \
+              --notes "${notes}" \
+              --verify-tag
+          fi
