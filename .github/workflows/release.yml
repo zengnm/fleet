@@ -92,26 +92,24 @@ jobs:
           target="${GOOS}-${GOARCH}"
           outdir="dist/${target}"
           packagedir="dist/packages"
-          archive_base="fleetd_${version}_${GOOS}_${GOARCH}"
           binaries=(fleetd fleet fleetn)
           build_flags=(-trimpath -buildvcs=false -gcflags=all=-l -ldflags="-s -w -buildid=")
-          package_files=()
 
           mkdir -p "${outdir}" "${packagedir}"
 
           for binary in "${binaries[@]}"; do
             go build "${build_flags[@]}" -o "${outdir}/${binary}${BINARY_EXT}" "./cmd/${binary}"
-            package_files+=("${binary}${BINARY_EXT}")
-          done
+            archive_base="${binary}_${version}_${GOOS}_${GOARCH}"
 
-          if [ "${ARCHIVE_EXT}" = "zip" ]; then
-            (
-              cd "${outdir}"
-              zip -9 -q "../../${packagedir}/${archive_base}.zip" "${package_files[@]}"
-            )
-          else
-            tar -C "${outdir}" -cf - "${package_files[@]}" | gzip -9 > "${packagedir}/${archive_base}.tar.gz"
-          fi
+            if [ "${ARCHIVE_EXT}" = "zip" ]; then
+              (
+                cd "${outdir}"
+                zip -9 -q "../../${packagedir}/${archive_base}.zip" "${binary}${BINARY_EXT}"
+              )
+            else
+              tar -C "${outdir}" -cf - "${binary}${BINARY_EXT}" | gzip -9 > "${packagedir}/${archive_base}.tar.gz"
+            fi
+          done
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v7
