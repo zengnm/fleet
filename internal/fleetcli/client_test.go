@@ -260,12 +260,90 @@ func TestClientInvokeSystemRunReturnsExitError(t *testing.T) {
 	}
 }
 
+func TestClientRunUsesShellCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runtime/fleet/nodes":
+			_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Build Node","platform":"darwin","status":"online"}]}`))
+		case "/runtime/fleet/nodes/node-1/run":
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var request struct {
+				Command []string `json:"command"`
+			}
+			if err := json.Unmarshal(raw, &request); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			want := []string{"sh", "-lc", "echo hello && uname"}
+			if strings.Join(request.Command, "\x00") != strings.Join(want, "\x00") {
+				t.Fatalf("command = %#v, want %#v", request.Command, want)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","accepted":true,"result":{"stdout":"hello\n","stderr":"","exitCode":0,"success":true,"timedOut":false}}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout strings.Builder
+	client := New(Config{
+		BaseURL: server.URL,
+		Stdout:  &stdout,
+	})
+	err := client.Run(context.Background(), []string{
+		"run",
+		"--node", "Build Node",
+		"--", "echo", "hello", "&&", "uname",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if stdout.String() != "hello\n" {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestClientRunUsesWindowsShell(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runtime/fleet/nodes":
+			_, _ = w.Write([]byte(`{"status":"ok","nodes":[{"node_id":"node-1","display_name":"Win Node","platform":"windows","status":"online"}]}`))
+		case "/runtime/fleet/nodes/node-1/run":
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var request struct {
+				Command []string `json:"command"`
+			}
+			if err := json.Unmarshal(raw, &request); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			want := []string{"cmd", "/C", "dir"}
+			if strings.Join(request.Command, "\x00") != strings.Join(want, "\x00") {
+				t.Fatalf("command = %#v, want %#v", request.Command, want)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"node_id":"node-1","accepted":true,"result":{"stdout":"","stderr":"","exitCode":0,"success":true,"timedOut":false}}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := New(Config{BaseURL: server.URL})
+	if err := client.Run(context.Background(), []string{"run", "--node", "Win Node", "--", "dir"}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+}
+
 func TestClientRejectsRemovedCLIForms(t *testing.T) {
 	client := New(Config{})
 
 	err := client.Run(context.Background(), []string{"run", "--node", "node-1"})
-	if err == nil || !strings.Contains(err.Error(), `unsupported subcommand "run"`) {
-		t.Fatalf("unexpected run error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "usage: fleet run --node <id|name|ip> -- <shell-command>") {
+		t.Fatalf("unexpected run usage error: %v", err)
 	}
 
 	err = client.Run(context.Background(), []string{"list"})
@@ -291,6 +369,7 @@ func TestClientHelpOnlyShowsNewCommands(t *testing.T) {
 	for _, expected := range []string{
 		"fleet status [--connected] [--last-connected <duration>]",
 		"fleet describe --node <id|name|ip>",
+		"fleet run --node <id|name|ip> -- <shell-command>",
 		"fleet invoke --node <id|name|ip> --command <command> [--params <json>]",
 	} {
 		if !strings.Contains(output, expected) {
@@ -298,7 +377,6 @@ func TestClientHelpOnlyShowsNewCommands(t *testing.T) {
 		}
 	}
 	for _, unexpected := range []string{
-		"fleet run",
 		"fleet list",
 		"--json",
 		"fleet describe <node-id>",

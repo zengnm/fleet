@@ -58,8 +58,14 @@ go run ./cmd/fleetn register \
 `fleetn` 的 `system.run` 默认需要节点本机 exec approvals 放行。修改 approvals 必须在节点本机执行；Fleet CLI 只支持远程查看：
 
 ```bash
-go run ./cmd/fleetn approvals add /usr/bin/uname
+go run ./cmd/fleetn approvals add /bin/sh
 go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.get --params '{}'
+```
+
+放行 shell 后可以用 `fleet run` 简洁执行 shell 命令：
+
+```bash
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
 ```
 
 `fleetn` 的 `browser.proxy` 默认使用内置 Chrome/CDP 代理，不依赖节点主机安装 OpenClaw；需要接外部浏览器代理时，可设置 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`。Chrome/Chromium 不在常见路径时，可设置 `FLEETN_BROWSER_EXECUTABLE_PATH` 或 `--browser-executable`。默认 headless；需可见窗口时，可在 `~/.fleetn/config.json` 设置 `"browserHeadless": false`，或注册时使用 `--browser-headless false` / `FLEETN_BROWSER_HEADLESS=false`。

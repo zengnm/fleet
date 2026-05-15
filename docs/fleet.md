@@ -47,7 +47,7 @@ openclaw node ---> fleetd ---> fleet Web / fleet CLI
 
 有两点需要特别说明：
 
-- `fleet` 的远程执行统一走 `fleet invoke --command system.run`；真实 OpenClaw 节点默认仍可能返回 `approval required`，这取决于节点主机的 exec approvals 配置，不是 `fleetd` 路由错误。
+- `fleet` 的远程 shell 执行可用 `fleet run --node <id> -- <shell命令>`；真实 OpenClaw 节点默认仍可能返回 `approval required`，这取决于节点主机的 exec approvals 配置，不是 `fleetd` 路由错误。
 - `system.which` 的参数要求会随节点实现变化；本文不再把它当作“复制即成功”的示例。
 
 ## 3. 端点总览
@@ -380,10 +380,11 @@ FLEET_API_KEY=replace-me
 USER_ID=anonymous
 ```
 
-CLI 现在只保留 3 个命令：
+CLI 现在只保留 4 个命令：
 
 - `fleet status`
 - `fleet describe --node <id|name|ip>`
+- `fleet run --node <id|name|ip> -- <shell命令>`
 - `fleet invoke --node <id|name|ip> --command <command> [--params <json>]`
 
 状态视图：
@@ -404,6 +405,12 @@ go run ./cmd/fleet describe --node <node-id>
 go run ./cmd/fleet invoke --node <node-id> --command <command> --params '{"key":"value"}'
 ```
 
+简洁 shell 执行形态：
+
+```bash
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
+```
+
 下面这些例子已经在真实节点上验证通过：
 
 读取节点主机的 exec approvals：
@@ -421,13 +428,13 @@ go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params
 在节点本机放行目标可执行文件：
 
 ```bash
-go run ./cmd/fleetn approvals add /usr/bin/uname
+go run ./cmd/fleetn approvals add /bin/sh
 ```
 
-执行一次 `system.run`：
+执行一次 shell 命令：
 
 ```bash
-go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
 ```
 
 `system.which` 的可执行示例：
@@ -440,6 +447,7 @@ go run ./cmd/fleet invoke --node <node-id> --command system.which --params '{"na
 
 - `system.execApprovals.get` 很适合用来确认节点侧 approvals 当前状态
 - `fleetn` 默认拒绝未放行的 `system.run`，只能在节点本机用 `fleetn approvals add/clear` 修改 `~/.fleetn/exec-approvals.json`
+- `fleet run -- ...` 通过节点 shell 执行，`fleetn` approval 命中的是 `/bin/sh` 或 Windows `cmd`；如果只想放行单个可执行文件，继续用 `invoke system.run` 的 argv 形态
 - `system.run.prepare` 能验证 `invoke` 链路没问题，还能看到节点规范化后的可执行路径
 - `system.which` 必须带 `bins`；不同机器上结果可能为空，这取决于节点主机是否真的有这些路径
 
@@ -563,21 +571,21 @@ go run ./cmd/fleet invoke --node <node-id> --command browser.proxy --params '{
 远程执行形态：
 
 ```bash
-go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
 ```
 
 这个例子我已经实测通过，但前提是先在节点主机放行目标可执行文件：
 
 ```bash
-openclaw approvals allowlist add "/usr/bin/uname"
-go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
+openclaw approvals allowlist add "/bin/sh"
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
 ```
 
 再补一个容易走通的例子：
 
 ```bash
-openclaw approvals allowlist add "/usr/bin/sw_vers"
-go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["sw_vers"]}'
+openclaw approvals allowlist add "/bin/sh"
+go run ./cmd/fleet run --node <node-id> -- sw_vers
 ```
 
 注意：
@@ -801,7 +809,7 @@ curl -X POST http://127.0.0.1:8090/runtime/fleet/nodes/<node-id>/invoke \
 - 页面在未配置 `FLEETD_JWT_RS256_PUBLIC_KEY` 时认领出的用户是 `anonymous`
 - CLI / API 带的是别的 `USER_ID`
 
-### 11.4 `fleet invoke --command system.run` 返回 `approval required`
+### 11.4 `fleet run` 返回 `approval required`
 
 这是节点主机的执行审批策略，不是 `fleetd` 路由错误。
 
@@ -820,16 +828,16 @@ go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params
 openclaw approvals get
 ```
 
-3. 如果你只是要先把流程跑通，直接放行目标可执行文件：
+3. 如果你只是要先把 `fleet run` 流程跑通，直接放行节点 shell：
 
 ```bash
-openclaw approvals allowlist add "/usr/bin/uname"
+openclaw approvals allowlist add "/bin/sh"
 ```
 
 4. 然后重试：
 
 ```bash
-go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"command":["uname","-a"]}'
+go run ./cmd/fleet run --node <node-id> -- 'uname -a'
 ```
 
 5. 如果还不行，再看 JSON 版状态：

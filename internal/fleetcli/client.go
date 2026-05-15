@@ -61,6 +61,8 @@ func (c *Client) Run(ctx context.Context, args []string) error {
 		return c.statusNodes(ctx, args[1:])
 	case "describe":
 		return c.describeNode(ctx, args[1:])
+	case "run":
+		return c.runNode(ctx, args[1:])
 	case "invoke":
 		return c.invokeNode(ctx, args[1:])
 	default:
@@ -148,6 +150,27 @@ func (c *Client) invokeNode(ctx context.Context, args []string) error {
 		return err
 	}
 	return c.renderInvokeResult(response.Result)
+}
+
+func (c *Client) runNode(ctx context.Context, args []string) error {
+	options, err := parseRunOptions(args)
+	if err != nil {
+		return err
+	}
+	node, err := c.resolveNode(ctx, options.node)
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Status string                `json:"status"`
+		Result spec.FleetRunResponse `json:"result"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/runtime/fleet/nodes/"+node.NodeID+"/run", spec.FleetRunRequest{
+		Command: shellCommandForNode(node, options.command),
+	}, &response); err != nil {
+		return err
+	}
+	return c.renderRunPayload(response.Result.Result)
 }
 
 func (c *Client) resolveNode(ctx context.Context, selector string) (spec.FleetOwnedNode, error) {
@@ -244,6 +267,41 @@ func parseInvokeOptions(args []string) (invokeOptions, error) {
 		return invokeOptions{}, errors.New("usage: fleet invoke --node <id|name|ip> --command <command> [--params <json>]")
 	}
 	return options, nil
+}
+
+type runOptions struct {
+	node    string
+	command string
+}
+
+func parseRunOptions(args []string) (runOptions, error) {
+	var options runOptions
+	fs := newFlagSet("run")
+	fs.StringVar(&options.node, "node", "", "")
+	if err := fs.Parse(args); err != nil {
+		return runOptions{}, err
+	}
+	commandArgs := fs.Args()
+	if strings.TrimSpace(options.node) == "" || len(commandArgs) == 0 {
+		return runOptions{}, errors.New("usage: fleet run --node <id|name|ip> -- <shell-command>")
+	}
+	options.command = strings.TrimSpace(strings.Join(commandArgs, " "))
+	if options.command == "" {
+		return runOptions{}, errors.New("usage: fleet run --node <id|name|ip> -- <shell-command>")
+	}
+	return options, nil
+}
+
+func shellCommandForNode(node spec.FleetOwnedNode, command string) []string {
+	if isWindowsPlatform(node.Platform) {
+		return []string{"cmd", "/C", command}
+	}
+	return []string{"sh", "-lc", command}
+}
+
+func isWindowsPlatform(platform string) bool {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	return platform == "windows" || platform == "win32" || platform == "win64"
 }
 
 func newFlagSet(name string) *flag.FlagSet {
@@ -671,17 +729,20 @@ func (c *Client) renderHelp() {
 	_, _ = fmt.Fprintln(c.stdout, "Commands:")
 	_, _ = fmt.Fprintln(c.stdout, "  fleet status [--connected] [--last-connected <duration>]")
 	_, _ = fmt.Fprintln(c.stdout, "  fleet describe --node <id|name|ip>")
+	_, _ = fmt.Fprintln(c.stdout, "  fleet run --node <id|name|ip> -- <shell-command>")
 	_, _ = fmt.Fprintln(c.stdout, "  fleet invoke --node <id|name|ip> --command <command> [--params <json>]")
 	_, _ = fmt.Fprintln(c.stdout, "")
 	_, _ = fmt.Fprintln(c.stdout, "Examples:")
 	_, _ = fmt.Fprintln(c.stdout, `  fleet status --connected`)
 	_, _ = fmt.Fprintln(c.stdout, `  fleet describe --node "Build Node"`)
+	_, _ = fmt.Fprintln(c.stdout, `  fleet run --node "Build Node" -- 'uname -a'`)
 	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.which --params '{"name":"git","bins":["/usr/bin/git"]}'`)
 	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'`)
 	_, _ = fmt.Fprintln(c.stdout, `  fleet invoke --node "Build Node" --command system.run --params '{"command":["uname","-a"]}'`)
 	_, _ = fmt.Fprintln(c.stdout, "")
 	_, _ = fmt.Fprintln(c.stdout, "Notes:")
 	_, _ = fmt.Fprintln(c.stdout, "  Use describe to inspect commands before invoke.")
+	_, _ = fmt.Fprintln(c.stdout, "  Use run for concise shell execution on a node.")
 	_, _ = fmt.Fprintln(c.stdout, "  Use invoke with system.run.prepare to preview execution.")
 	_, _ = fmt.Fprintln(c.stdout, "  Use invoke with system.run for remote execution.")
 }
