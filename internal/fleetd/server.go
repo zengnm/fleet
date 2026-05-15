@@ -346,6 +346,10 @@ func (s *Server) handleRuntimeNodeRoutes(w http.ResponseWriter, r *http.Request,
 			s.writeError(w, http.StatusBadRequest, "invalid_json", err)
 			return
 		}
+		if strings.TrimSpace(request.Command) == "system.execApprovals.set" {
+			s.writeError(w, http.StatusForbidden, "forbidden", errors.New("approvals can only be modified on the node host"))
+			return
+		}
 		result, err := s.fleet.InvokeNode(r.Context(), principal.Subject, nodeID, request.Command, request.Params)
 		if err != nil {
 			s.writeFleetError(w, err)

@@ -148,6 +148,10 @@ func TestFleetdEndToEnd(t *testing.T) {
 	if invokeResult.NodeID != nodeAlias {
 		t.Fatalf("invoke result node id = %q, want %q", invokeResult.NodeID, nodeAlias)
 	}
+	runtimeInvokeNodeError(t, baseURL, "runtime-key", "user-a", nodeAlias, map[string]any{
+		"command": "system.execApprovals.set",
+		"params":  map[string]any{"patterns": []string{"/usr/bin/uname"}},
+	}, http.StatusForbidden, "forbidden")
 
 	runResult := runtimeRunNode(t, baseURL, "runtime-key", "user-a", nodeAlias, map[string]any{
 		"command": []string{"echo", "hello"},

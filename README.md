@@ -55,10 +55,11 @@ go run ./cmd/fleetn register \
 
 如果服务端没有配置 `FLEETD_GATEWAY_TOKEN` / `FLEETD_GATEWAY_PASSWORD`，可以不传 `--token`。默认前台常驻运行；需要安装用户级后台服务时增加 `--install`。`fleetn --install` 使用本机用户级服务机制：macOS 是 LaunchAgent，Linux 是 systemd user service，Windows 是当前用户 Scheduled Task。
 
-`fleetn` 的 `system.run` 默认需要节点本机 exec approvals 放行。认领后可通过 Fleet CLI 配置：
+`fleetn` 的 `system.run` 默认需要节点本机 exec approvals 放行。修改 approvals 必须在节点本机执行；Fleet CLI 只支持远程查看：
 
 ```bash
-go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.set --params '{"patterns":["/usr/bin/uname"]}'
+go run ./cmd/fleetn approvals add /usr/bin/uname
+go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.get --params '{}'
 ```
 
 `fleetn` 的 `browser.proxy` 默认使用内置 Chrome/CDP 代理，不依赖节点主机安装 OpenClaw；需要接外部浏览器代理时，可设置 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`。Chrome/Chromium 不在常见路径时，可设置 `FLEETN_BROWSER_EXECUTABLE_PATH` 或 `--browser-executable`。默认 headless；需可见窗口时，可在 `~/.fleetn/config.json` 设置 `"browserHeadless": false`，或注册时使用 `--browser-headless false` / `FLEETN_BROWSER_HEADLESS=false`。

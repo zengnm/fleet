@@ -1602,7 +1602,7 @@ type NodeInvokeSuccessResult = {
 注意：
 
 - `system.run` 和 `system.run.prepare` 不允许走这里
-- `system.execApprovals.get/set` 也不允许走这里
+- `system.execApprovals.get` 也不允许走这里；approvals 修改不通过 `fleet invoke`
 - 命令是否允许，还要经过 node 声明命令和网关 allowlist 双重检查
 
 示例：
@@ -2099,7 +2099,6 @@ type NodePendingDrainResult = {
   - `system.run`
   - `system.run.prepare`
   - `system.execApprovals.get`
-  - `system.execApprovals.set`
 - `system.which`、`system.notify` 等显式 node command 可以继续通过 `node.invoke`
 
 因此，最新版里“操作 node 执行命令”的协议分成两条线：

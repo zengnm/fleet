@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -27,6 +28,8 @@ func RunCLI(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		return runRegister(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runAgentCommand(ctx, args[1:], stdout)
+	case "approvals":
+		return runApprovalsCommand(args[1:], stdout)
 	case "status":
 		status, err := UserServiceStatus(ctx, InstallOptions{})
 		if err != nil {
@@ -176,6 +179,131 @@ func runAgentCommand(ctx context.Context, args []string, stdout io.Writer) error
 	})
 }
 
+func runApprovalsCommand(args []string, stdout io.Writer) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "add":
+			return runApprovalsAdd(args[1:], stdout)
+		case "clear":
+			return runApprovalsClear(args[1:], stdout)
+		}
+	}
+	configPath := DefaultConfigPath()
+	fs := newFlagSet("approvals")
+	fs.StringVar(&configPath, "config", configPath, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: fleetn approvals [--config <path>]")
+	}
+	cfg, err := approvalsConfig(configPath)
+	if err != nil {
+		return err
+	}
+	payload, err := execApprovalsGet(cfg)
+	if err != nil {
+		return err
+	}
+	return renderApprovals(stdout, payload)
+}
+
+func runApprovalsAdd(args []string, stdout io.Writer) error {
+	configPath := DefaultConfigPath()
+	fs := newFlagSet("approvals add")
+	fs.StringVar(&configPath, "config", configPath, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("usage: fleetn approvals add [--config <path>] <pattern>...")
+	}
+	cfg, err := approvalsConfig(configPath)
+	if err != nil {
+		return err
+	}
+	payload, err := execApprovalsAdd(cfg, fs.Args())
+	if err != nil {
+		return err
+	}
+	return renderApprovals(stdout, payload)
+}
+
+func runApprovalsClear(args []string, stdout io.Writer) error {
+	configPath := DefaultConfigPath()
+	fs := newFlagSet("approvals clear")
+	fs.StringVar(&configPath, "config", configPath, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: fleetn approvals clear [--config <path>]")
+	}
+	cfg, err := approvalsConfig(configPath)
+	if err != nil {
+		return err
+	}
+	payload, err := execApprovalsClear(cfg)
+	if err != nil {
+		return err
+	}
+	return renderApprovals(stdout, payload)
+}
+
+func approvalsConfig(configPath string) (Config, error) {
+	cfg, err := LoadConfigFile(configPath)
+	if err == nil {
+		return cfg, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return Config{}, err
+	}
+	return Config{ApprovalsPath: DefaultApprovalsPath()}, nil
+}
+
+func renderApprovals(w io.Writer, payload map[string]any) error {
+	if path, _ := payload["path"].(string); path != "" {
+		_, _ = fmt.Fprintf(w, "Path: %s\n", path)
+	}
+	if exists, ok := payload["exists"].(bool); ok {
+		_, _ = fmt.Fprintf(w, "Exists: %s\n", boolWord(exists))
+	}
+	if hash, _ := payload["hash"].(string); hash != "" {
+		_, _ = fmt.Fprintf(w, "Hash: %s\n", hash)
+	}
+	file, _ := payload["file"].(map[string]any)
+	agents, _ := file["agents"].(map[string]any)
+	lines := []string{}
+	for agentID, rawAgent := range agents {
+		agent, _ := rawAgent.(map[string]any)
+		allowlist, _ := agent["allowlist"].([]any)
+		for _, item := range allowlist {
+			entry, _ := item.(map[string]any)
+			pattern, _ := entry["pattern"].(string)
+			if strings.TrimSpace(pattern) != "" {
+				lines = append(lines, fmt.Sprintf("%s\t%s", agentID, pattern))
+			}
+		}
+	}
+	sort.Strings(lines)
+	if len(lines) == 0 {
+		_, _ = fmt.Fprintln(w, "Allowlist: (empty)")
+		return nil
+	}
+	_, _ = fmt.Fprintln(w, "Allowlist:")
+	for _, line := range lines {
+		_, _ = fmt.Fprintf(w, "- %s\n", line)
+	}
+	return nil
+}
+
+func boolWord(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -189,6 +317,9 @@ func renderHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  fleetn register --server <url> --token <token> --name <display-name> [--install] [--browser-headless true|false]")
 	_, _ = fmt.Fprintln(w, "  fleetn register --server <url> --password <password> --name <display-name> [--install] [--browser-headless true|false]")
 	_, _ = fmt.Fprintln(w, "  fleetn run [--config <path>]")
+	_, _ = fmt.Fprintln(w, "  fleetn approvals [--config <path>]")
+	_, _ = fmt.Fprintln(w, "  fleetn approvals add [--config <path>] <pattern>...")
+	_, _ = fmt.Fprintln(w, "  fleetn approvals clear [--config <path>]")
 	_, _ = fmt.Fprintln(w, "  fleetn status")
 	_, _ = fmt.Fprintln(w, "  fleetn stop")
 	_, _ = fmt.Fprintln(w, "  fleetn restart")

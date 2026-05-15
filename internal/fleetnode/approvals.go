@@ -44,11 +44,55 @@ func execApprovalsGet(cfg Config) (map[string]any, error) {
 	}, nil
 }
 
-func execApprovalsSet(cfg Config, params map[string]any) (map[string]any, error) {
-	file, err := approvalsFileFromParams(params)
+func execApprovalsAdd(cfg Config, patterns []string) (map[string]any, error) {
+	file, _, _, err := loadApprovalsFile(cfg.ApprovalsPath)
 	if err != nil {
 		return nil, err
 	}
+	normalizeApprovalsFile(&file)
+	agent := file.Agents[defaultApprovalAgent]
+	entries := make([]approvalEntry, 0, len(agent.Allowlist)+len(patterns))
+	seen := map[string]struct{}{}
+	for _, entry := range agent.Allowlist {
+		pattern := strings.TrimSpace(entry.Pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		entries = append(entries, approvalEntry{Pattern: pattern})
+	}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		entries = append(entries, approvalEntry{Pattern: pattern})
+	}
+	if len(entries) == 0 {
+		return nil, errors.New("pattern is required")
+	}
+	agent.Allowlist = entries
+	file.Agents[defaultApprovalAgent] = agent
+	if err := writeApprovalsFile(cfg.ApprovalsPath, file); err != nil {
+		return nil, err
+	}
+	return execApprovalsGet(cfg)
+}
+
+func execApprovalsClear(cfg Config) (map[string]any, error) {
+	file, _, _, err := loadApprovalsFile(cfg.ApprovalsPath)
+	if err != nil {
+		return nil, err
+	}
+	normalizeApprovalsFile(&file)
+	file.Agents[defaultApprovalAgent] = approvalAgent{Allowlist: []approvalEntry{}}
 	if err := writeApprovalsFile(cfg.ApprovalsPath, file); err != nil {
 		return nil, err
 	}
@@ -110,40 +154,6 @@ func writeApprovalsFile(path string, file approvalsFile) error {
 		return err
 	}
 	return os.WriteFile(path, append(payload, '\n'), 0o600)
-}
-
-func approvalsFileFromParams(params map[string]any) (approvalsFile, error) {
-	if rawFile, ok := params["file"]; ok {
-		raw, err := json.Marshal(rawFile)
-		if err != nil {
-			return approvalsFile{}, err
-		}
-		var file approvalsFile
-		if err := json.Unmarshal(raw, &file); err != nil {
-			return approvalsFile{}, err
-		}
-		normalizeApprovalsFile(&file)
-		return file, nil
-	}
-	patterns := stringSlice(params["patterns"])
-	if len(patterns) == 0 {
-		patterns = stringSlice(params["allowlist"])
-	}
-	if len(patterns) == 0 {
-		return approvalsFile{}, errors.New("file or patterns is required")
-	}
-	agentID, _ := params["agentId"].(string)
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		agentID = defaultApprovalAgent
-	}
-	entries := make([]approvalEntry, 0, len(patterns))
-	for _, pattern := range patterns {
-		if strings.TrimSpace(pattern) != "" {
-			entries = append(entries, approvalEntry{Pattern: strings.TrimSpace(pattern)})
-		}
-	}
-	return approvalsFile{Agents: map[string]approvalAgent{agentID: {Allowlist: entries}}}, nil
 }
 
 func emptyApprovalsFile() approvalsFile {

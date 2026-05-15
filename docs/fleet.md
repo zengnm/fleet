@@ -216,7 +216,7 @@ export FLEETN_DISPLAY_NAME="Build Node"
 go run ./cmd/fleetn register
 ```
 
-`fleetn` 提供 headless shell 节点能力：`system.which`、`system.run.prepare`、`system.run`、`system.execApprovals.get/set`。浏览器能力默认由 `fleetn` 内置的 Chrome/CDP 代理提供；如果设置了 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`，则改为把 `browser.proxy` 请求转发到该本机浏览器代理 HTTP 服务。
+`fleetn` 提供 headless shell 节点能力：`system.which`、`system.run.prepare`、`system.run`、`system.execApprovals.get`。approvals 修改只能在节点本机通过 `fleetn approvals add/clear` 完成；Fleet CLI 只支持远程查看。浏览器能力默认由 `fleetn` 内置的 Chrome/CDP 代理提供；如果设置了 `FLEETN_BROWSER_PROXY_URL` 或 `--browser-proxy`，则改为把 `browser.proxy` 请求转发到该本机浏览器代理 HTTP 服务。
 
 用户级后台服务管理：
 
@@ -418,10 +418,10 @@ go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.get --
 go run ./cmd/fleet invoke --node <node-id> --command system.run.prepare --params '{"command":["uname","-a"],"rawCommand":"uname -a"}'
 ```
 
-放行目标可执行文件：
+在节点本机放行目标可执行文件：
 
 ```bash
-go run ./cmd/fleet invoke --node <node-id> --command system.execApprovals.set --params '{"patterns":["/usr/bin/uname"]}'
+go run ./cmd/fleetn approvals add /usr/bin/uname
 ```
 
 执行一次 `system.run`：
@@ -439,7 +439,7 @@ go run ./cmd/fleet invoke --node <node-id> --command system.which --params '{"na
 说明：
 
 - `system.execApprovals.get` 很适合用来确认节点侧 approvals 当前状态
-- `fleetn` 默认拒绝未放行的 `system.run`，可用 `system.execApprovals.set` 写入本机 `~/.fleetn/exec-approvals.json`
+- `fleetn` 默认拒绝未放行的 `system.run`，只能在节点本机用 `fleetn approvals add/clear` 修改 `~/.fleetn/exec-approvals.json`
 - `system.run.prepare` 能验证 `invoke` 链路没问题，还能看到节点规范化后的可执行路径
 - `system.which` 必须带 `bins`；不同机器上结果可能为空，这取决于节点主机是否真的有这些路径
 
@@ -584,7 +584,7 @@ go run ./cmd/fleet invoke --node <node-id> --command system.run --params '{"comm
 
 - `invoke` 能否成功，取决于节点实际暴露的 `commands` 和参数要求
 - `system.run` 在真实节点和 `fleetn` 节点上都会受节点主机本地 exec approvals 约束
-- OpenClaw 节点可在节点主机本机执行 `openclaw approvals ...`；`fleetn` 节点可通过 `system.execApprovals.set` 写入 `~/.fleetn/exec-approvals.json`
+- OpenClaw 节点可在节点主机本机执行 `openclaw approvals ...`；`fleetn` 节点可在节点主机本机执行 `fleetn approvals add/clear`
 
 ## 8. Runtime HTTP API 示例
 

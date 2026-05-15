@@ -218,7 +218,7 @@ func buildConnectParams(cfg Config, identity *Identity, nonce string) (connectPa
 		MinProtocol: protocolVersion,
 		MaxProtocol: protocolVersion,
 		Caps:        []string{"system"},
-		Commands:    []string{"system.which", "system.run.prepare", "system.run", "system.execApprovals.get", "system.execApprovals.set"},
+		Commands:    []string{"system.which", "system.run.prepare", "system.run", "system.execApprovals.get"},
 		Permissions: map[string]bool{"exec": true},
 		PathEnv:     os.Getenv("PATH"),
 		Role:        "node",
@@ -364,8 +364,6 @@ func executeCommand(ctx context.Context, cfg Config, request nodeInvokeRequestEv
 		return systemRun(ctx, cfg, params, timeout)
 	case "system.execApprovals.get":
 		return execApprovalsGet(cfg)
-	case "system.execApprovals.set":
-		return execApprovalsSet(cfg, params)
 	case "browser.proxy":
 		timeout := commandTimeout(cfg.CommandTimeout, request.TimeoutMs, params)
 		return browserProxy(ctx, cfg, params, timeout)

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -248,7 +249,7 @@ func TestSystemCommands(t *testing.T) {
 	}
 }
 
-func TestExecApprovalsGetSet(t *testing.T) {
+func TestExecApprovalsGetAddClear(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{ApprovalsPath: filepath.Join(t.TempDir(), "exec-approvals.json")}
@@ -259,17 +260,133 @@ func TestExecApprovalsGetSet(t *testing.T) {
 	if initial["exists"] != false {
 		t.Fatalf("expected missing approvals file: %+v", initial)
 	}
-	updated, err := execApprovalsSet(cfg, map[string]any{"patterns": []any{"/bin/sh", "/usr/bin/env"}})
+	if err := writeApprovalsFile(cfg.ApprovalsPath, approvalsFile{Agents: map[string]approvalAgent{
+		"other": {Allowlist: []approvalEntry{{Pattern: "/opt/other"}}},
+	}}); err != nil {
+		t.Fatalf("writeApprovalsFile: %v", err)
+	}
+	updated, err := execApprovalsAdd(cfg, []string{"/bin/sh", "/usr/bin/*", "/bin/sh", " "})
 	if err != nil {
-		t.Fatalf("execApprovalsSet: %v", err)
+		t.Fatalf("execApprovalsAdd: %v", err)
 	}
 	if updated["exists"] != true || strings.TrimSpace(updated["hash"].(string)) == "" {
 		t.Fatalf("unexpected updated approvals: %+v", updated)
 	}
-	file := updated["file"].(map[string]any)
-	agents := file["agents"].(map[string]any)
-	if _, ok := agents[defaultApprovalAgent]; !ok {
-		t.Fatalf("missing default agent in approvals: %+v", updated)
+	file, _, _, err := loadApprovalsFile(cfg.ApprovalsPath)
+	if err != nil {
+		t.Fatalf("loadApprovalsFile: %v", err)
+	}
+	if got := file.Agents[defaultApprovalAgent].Allowlist; len(got) != 2 || got[0].Pattern != "/bin/sh" || got[1].Pattern != "/usr/bin/*" {
+		t.Fatalf("unexpected fleetn allowlist: %+v", got)
+	}
+	if got := file.Agents["other"].Allowlist; len(got) != 1 || got[0].Pattern != "/opt/other" {
+		t.Fatalf("other agent was not preserved: %+v", file)
+	}
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("LookPath sh: %v", err)
+	}
+	if _, err := execApprovalsAdd(cfg, []string{filepath.Join(filepath.Dir(shPath), "*")}); err != nil {
+		t.Fatalf("execApprovalsAdd glob: %v", err)
+	}
+	if err := requireRunApproval(cfg, []string{"sh"}); err != nil {
+		t.Fatalf("expected glob approval to match sh: %v", err)
+	}
+	cleared, err := execApprovalsClear(cfg)
+	if err != nil {
+		t.Fatalf("execApprovalsClear: %v", err)
+	}
+	if cleared["exists"] != true {
+		t.Fatalf("expected approvals file after clear: %+v", cleared)
+	}
+	file, _, _, err = loadApprovalsFile(cfg.ApprovalsPath)
+	if err != nil {
+		t.Fatalf("loadApprovalsFile after clear: %v", err)
+	}
+	if got := file.Agents[defaultApprovalAgent].Allowlist; len(got) != 0 {
+		t.Fatalf("expected empty fleetn allowlist after clear: %+v", got)
+	}
+	if _, ok := file.Agents["other"]; !ok {
+		t.Fatalf("clear should preserve other agents: %+v", file)
+	}
+}
+
+func TestApprovalsCLIAddListClear(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := Config{
+		ServerURL:     "http://127.0.0.1:8090",
+		DisplayName:   "Node",
+		IdentityPath:  filepath.Join(dir, "identity.json"),
+		ApprovalsPath: filepath.Join(dir, "exec-approvals.json"),
+	}
+	if err := SaveConfigFile(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	var output bytes.Buffer
+	if err := RunCLI(context.Background(), []string{"approvals", "add", "--config", configPath, "/bin/sh", "/usr/bin/*", "/bin/sh"}, &output, io.Discard); err != nil {
+		t.Fatalf("approvals add: %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "/bin/sh") || !strings.Contains(got, "/usr/bin/*") {
+		t.Fatalf("unexpected add output: %s", got)
+	}
+	output.Reset()
+	if err := RunCLI(context.Background(), []string{"approvals", "--config", configPath}, &output, io.Discard); err != nil {
+		t.Fatalf("approvals list: %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "Allowlist:") || !strings.Contains(got, "/usr/bin/*") {
+		t.Fatalf("unexpected list output: %s", got)
+	}
+	output.Reset()
+	if err := RunCLI(context.Background(), []string{"approvals", "clear", "--config", configPath}, &output, io.Discard); err != nil {
+		t.Fatalf("approvals clear: %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "Allowlist: (empty)") {
+		t.Fatalf("unexpected clear output: %s", got)
+	}
+	file, _, _, err := loadApprovalsFile(cfg.ApprovalsPath)
+	if err != nil {
+		t.Fatalf("loadApprovalsFile: %v", err)
+	}
+	if got := file.Agents[defaultApprovalAgent].Allowlist; len(got) != 0 {
+		t.Fatalf("expected empty allowlist: %+v", got)
+	}
+}
+
+func TestRemoteExecApprovalsSetUnsupported(t *testing.T) {
+	t.Parallel()
+
+	result := handleInvoke(context.Background(), Config{ApprovalsPath: filepath.Join(t.TempDir(), "exec-approvals.json")}, "node-1", nodeInvokeRequestEvent{
+		ID:      "invoke-1",
+		NodeID:  "node-1",
+		Command: "system.execApprovals.set",
+	})
+	if result.OK {
+		t.Fatalf("expected remote system.execApprovals.set to fail: %+v", result)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Message, "unsupported command") {
+		t.Fatalf("unexpected remote set error: %+v", result)
+	}
+}
+
+func TestBuildConnectParamsDoesNotAdvertiseApprovalsSet(t *testing.T) {
+	t.Parallel()
+
+	identity, err := LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity.json"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	params, err := buildConnectParams(Config{DisplayName: "Node"}, identity, "nonce")
+	if err != nil {
+		t.Fatalf("buildConnectParams: %v", err)
+	}
+	if containsString(params.Commands, "system.execApprovals.set") {
+		t.Fatalf("system.execApprovals.set should not be advertised: %v", params.Commands)
+	}
+	if !containsString(params.Commands, "system.execApprovals.get") {
+		t.Fatalf("system.execApprovals.get should still be advertised: %v", params.Commands)
 	}
 }
 
@@ -495,12 +612,27 @@ func TestFleetnEndToEndWithFleetd(t *testing.T) {
 	if !invoke.OK {
 		t.Fatalf("system.which failed: %+v", invoke)
 	}
-	setApprovals := runtimeInvokeNode(t, httpServer.URL, "runtime-key", "anonymous", nodeID, map[string]any{
+	remoteSetBody, _ := json.Marshal(map[string]any{
 		"command": "system.execApprovals.set",
 		"params":  map[string]any{"patterns": []string{"sh"}},
 	})
-	if !setApprovals.OK {
-		t.Fatalf("system.execApprovals.set failed: %+v", setApprovals)
+	remoteSetReq, err := http.NewRequest(http.MethodPost, httpServer.URL+"/runtime/fleet/nodes/"+nodeID+"/invoke", bytes.NewReader(remoteSetBody))
+	if err != nil {
+		t.Fatalf("new remote set request: %v", err)
+	}
+	remoteSetReq.Header.Set("Content-Type", "application/json")
+	remoteSetReq.Header.Set("API_KEY", "runtime-key")
+	remoteSetReq.Header.Set("USER_ID", "anonymous")
+	remoteSetRes, err := http.DefaultClient.Do(remoteSetReq)
+	if err != nil {
+		t.Fatalf("remote set request: %v", err)
+	}
+	_ = remoteSetRes.Body.Close()
+	if remoteSetRes.StatusCode != http.StatusForbidden {
+		t.Fatalf("remote approvals set status = %d", remoteSetRes.StatusCode)
+	}
+	if _, err := execApprovalsAdd(cfg, []string{"sh"}); err != nil {
+		t.Fatalf("local execApprovalsAdd: %v", err)
 	}
 	run := runtimeRunNode(t, httpServer.URL, "runtime-key", "anonymous", nodeID, map[string]any{
 		"command": []string{"sh", "-c", "printf fleetn"},
